@@ -195,7 +195,7 @@ public final class CurrencyAmountView extends FrameLayout
 		this.listener = listener;
 	}
 
-	@CheckForNull
+	@CheckForNull @Nullable
 	public BigInteger getAmount()
 	{
 		if (isValidAmount(false))

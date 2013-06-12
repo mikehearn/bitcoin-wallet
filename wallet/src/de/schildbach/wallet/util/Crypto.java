@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *    http://opensource.org/licenses/mit-license.php
+ *	http://opensource.org/licenses/mit-license.php
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -100,9 +100,9 @@ public class Crypto
 	 * Get password and generate key and iv.
 	 * 
 	 * @param password
-	 *            The password to use in key generation
+	 *			The password to use in key generation
 	 * @param salt
-	 *            The salt to use in key generation
+	 *			The salt to use in key generation
 	 * @return The CipherParameters containing the created key
 	 */
 	private static CipherParameters getAESPasswordKey(final char[] password, final byte[] salt)
@@ -119,9 +119,9 @@ public class Crypto
 	 * Password based encryption using AES - CBC 256 bits.
 	 * 
 	 * @param plainText
-	 *            The text to encrypt
+	 *			The text to encrypt
 	 * @param password
-	 *            The password to use for encryption
+	 *			The password to use for encryption
 	 * @return The encrypted string
 	 * @throws IOException
 	 */
@@ -141,9 +141,9 @@ public class Crypto
 	 * Password based encryption using AES - CBC 256 bits.
 	 * 
 	 * @param plainBytes
-	 *            The bytes to encrypt
+	 *			The bytes to encrypt
 	 * @param password
-	 *            The password to use for encryption
+	 *			The password to use for encryption
 	 * @return SALT_LENGTH bytes of salt followed by the encrypted bytes.
 	 * @throws IOException
 	 */
@@ -182,9 +182,9 @@ public class Crypto
 	 * Decrypt text previously encrypted with this class.
 	 * 
 	 * @param textToDecode
-	 *            The code to decrypt
+	 *			The code to decrypt
 	 * @param password
-	 *            password to use for decryption
+	 *			password to use for decryption
 	 * @return The decrypted text
 	 * @throws IOException
 	 */
@@ -207,9 +207,9 @@ public class Crypto
 	 * Decrypt bytes previously encrypted with this class.
 	 * 
 	 * @param bytesToDecode
-	 *            The bytes to decrypt
+	 *			The bytes to decrypt
 	 * @param passwordbThe
-	 *            password to use for decryption
+	 *			password to use for decryption
 	 * @return The decrypted bytes
 	 * @throws IOException
 	 */

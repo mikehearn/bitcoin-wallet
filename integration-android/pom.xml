@@ -16,7 +16,6 @@
 	</parent>
 
 	<dependencies>
-
 		<!-- android.*, java.*, javax.* -->
 		<dependency>
 			<groupId>com.google.android</groupId>
@@ -24,7 +23,6 @@
 			<version>2.3.3</version>
 			<scope>provided</scope>
 		</dependency>
-
 	</dependencies>
 
 	<build>

@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2013 the original author or authors.
+ * Copyright 2013 Google Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -69,12 +70,15 @@ import com.google.bitcoin.store.UnreadableWalletException;
 import com.google.bitcoin.store.WalletProtobufSerializer;
 import com.google.bitcoin.utils.Threading;
 import com.google.bitcoin.wallet.WalletFiles;
+import com.google.bitcoin.protocols.channels.StoredPaymentChannelClientStates;
 
 import de.schildbach.wallet.service.BlockchainService;
 import de.schildbach.wallet.service.BlockchainServiceImpl;
+import de.schildbach.wallet.util.ChainServiceTransactionBroadcaster;
 import de.schildbach.wallet.util.CrashReporter;
 import de.schildbach.wallet.util.Io;
 import de.schildbach.wallet.util.LinuxSecureRandom;
+import de.schildbach.wallet.util.PaymentChannelContractToCreatorMap;
 import de.schildbach.wallet.util.WalletUtils;
 import de.schildbach.wallet_test.R;
 
@@ -86,6 +90,7 @@ public class WalletApplication extends Application
 	private SharedPreferences prefs;
 	private ActivityManager activityManager;
 
+	private PaymentChannelContractToCreatorMap contractHashToCreatorMap;
 	private Intent blockchainServiceIntent;
 	private Intent blockchainServiceCancelCoinsReceivedIntent;
 	private Intent blockchainServiceResetBlockchainIntent;
@@ -147,6 +152,7 @@ public class WalletApplication extends Application
 		migrateWalletToProtobuf();
 
 		loadWalletFromProtobuf();
+		addWalletExtensions(); // Make sure our StoredPaymentChannelClientStates get added before we save
 		wallet.autosaveToFile(walletFile, 1, TimeUnit.SECONDS, new WalletAutosaveEventListener());
 
 		final int lastVersionCode = prefs.getInt(Constants.PREFS_KEY_LAST_VERSION, 0);
@@ -209,10 +215,13 @@ public class WalletApplication extends Application
 		logcatAppender.setEncoder(logcatPattern);
 		logcatAppender.start();
 
-		final ch.qos.logback.classic.Logger log = context.getLogger(Logger.ROOT_LOGGER_NAME);
-		log.addAppender(fileAppender);
-		log.addAppender(logcatAppender);
-		log.setLevel(Level.INFO);
+		final ch.qos.logback.classic.Logger allLogging = context.getLogger(Logger.ROOT_LOGGER_NAME);
+		allLogging.addAppender(fileAppender);
+		allLogging.addAppender(logcatAppender);
+		allLogging.setLevel(Level.INFO);
+
+		final ch.qos.logback.classic.Logger appLogging = context.getLogger("de.schildbach.wallet");
+		appLogging.setLevel(Level.INFO);
 	}
 
 	private static final class WalletAutosaveEventListener implements WalletFiles.Listener
@@ -234,6 +243,10 @@ public class WalletApplication extends Application
 	public Wallet getWallet()
 	{
 		return wallet;
+	}
+
+	public PaymentChannelContractToCreatorMap getContractHashToCreatorMap() {
+		return contractHashToCreatorMap;
 	}
 
 	private void migrateWalletToProtobuf()
@@ -277,12 +290,15 @@ public class WalletApplication extends Application
 			try
 			{
 				walletStream = new FileInputStream(walletFile);
-
-				wallet = new WalletProtobufSerializer().readWallet(walletStream);
+				wallet = new Wallet(Constants.NETWORK_PARAMETERS);
+				addWalletExtensions(); // All extensions must be present before we deserialize
+				new WalletProtobufSerializer().readWallet(WalletProtobufSerializer.parseToProto(walletStream), wallet);
 
 				log.info("wallet loaded from: '" + walletFile + "', took " + (System.currentTimeMillis() - start) + "ms");
+				if (log.isDebugEnabled())
+					log.debug(wallet.toString(false, true, true, null));
 			}
-			catch (final FileNotFoundException x)
+			catch (final IOException x)
 			{
 				log.error("problem loading wallet", x);
 
@@ -377,6 +393,16 @@ public class WalletApplication extends Application
 
 		log.info("wallet has no usable key - creating");
 		addNewKeyToWallet();
+	}
+
+	/**
+	 * Adds all necessary wallet extensions for use/deserialization
+	 */
+	private void addWalletExtensions() {
+		contractHashToCreatorMap =
+				(PaymentChannelContractToCreatorMap) wallet.addOrGetExistingExtension(new PaymentChannelContractToCreatorMap(wallet));
+
+		wallet.addOrGetExistingExtension(new StoredPaymentChannelClientStates(wallet, new ChainServiceTransactionBroadcaster(this)));
 	}
 
 	public void addNewKeyToWallet()

@@ -5,7 +5,7 @@
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *	http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -82,6 +82,11 @@ public class CircularProgressView extends View
 		postInvalidate();
 	}
 
+	public int getProgress()
+	{
+		return this.progress;
+	}
+
 	public void setMaxProgress(final int maxProgress)
 	{
 		this.maxProgress = maxProgress;
@@ -90,12 +95,22 @@ public class CircularProgressView extends View
 		postInvalidate();
 	}
 
+	public int getMaxProgress()
+	{
+		return this.maxProgress;
+	}
+
 	public void setSize(final int size)
 	{
 		this.size = size;
 
 		updatePath(getWidth(), getHeight());
 		postInvalidate();
+	}
+
+	public int getSize()
+	{
+		return this.size;
 	}
 
 	public void setMaxSize(final int maxSize)

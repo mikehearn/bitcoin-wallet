@@ -64,24 +64,31 @@ import com.google.bitcoin.core.Address;
 import com.google.bitcoin.core.ScriptException;
 import com.google.bitcoin.core.Transaction;
 import com.google.bitcoin.core.Transaction.Purpose;
+import com.google.bitcoin.core.TransactionInput;
 import com.google.bitcoin.core.TransactionConfidence.ConfidenceType;
 import com.google.bitcoin.core.Wallet;
 
+import com.google.common.annotations.VisibleForTesting;
 import de.schildbach.wallet.AddressBookProvider;
 import de.schildbach.wallet.Constants;
 import de.schildbach.wallet.WalletApplication;
 import de.schildbach.wallet.util.BitmapFragment;
 import de.schildbach.wallet.util.Nfc;
+import de.schildbach.wallet.util.PaymentChannelContractToCreatorMap;
 import de.schildbach.wallet.util.Qr;
 import de.schildbach.wallet.util.ThrottlingWalletChangeListener;
 import de.schildbach.wallet.util.WalletUtils;
 import de.schildbach.wallet_test.R;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * @author Andreas Schildbach
  */
 public class TransactionsListFragment extends SherlockListFragment implements LoaderCallbacks<List<Transaction>>, OnSharedPreferenceChangeListener
 {
+	private static final Logger log = LoggerFactory.getLogger(TransactionsListFragment.class);
+
 	public enum Direction
 	{
 		RECEIVED, SENT
@@ -247,6 +254,9 @@ public class TransactionsListFragment extends SherlockListFragment implements Lo
 					final BigInteger value = tx.getValue(wallet);
 					final boolean sent = value.signum() < 0;
 
+					// payment channel
+					String paymentChannelCreatorApp = application.getContractHashToCreatorMap().getCreatorApp(tx.getHash());
+
 					address = sent ? WalletUtils.getToAddress(tx) : WalletUtils.getFromAddress(tx);
 
 					final String label;
@@ -254,6 +264,8 @@ public class TransactionsListFragment extends SherlockListFragment implements Lo
 						label = getString(R.string.wallet_transactions_fragment_coinbase);
 					else if (address != null)
 						label = AddressBookProvider.resolveLabel(activity, address.toString());
+					else if (paymentChannelCreatorApp != null)
+						label = paymentChannelCreatorApp;
 					else
 						label = "?";
 
@@ -340,7 +352,7 @@ public class TransactionsListFragment extends SherlockListFragment implements Lo
 	@Override
 	public Loader<List<Transaction>> onCreateLoader(final int id, final Bundle args)
 	{
-		return new TransactionsLoader(activity, wallet, direction);
+		return new TransactionsLoader(activity, application, direction);
 	}
 
 	@Override
@@ -364,17 +376,19 @@ public class TransactionsListFragment extends SherlockListFragment implements Lo
 		}
 	};
 
-	private static class TransactionsLoader extends AsyncTaskLoader<List<Transaction>>
+	@VisibleForTesting static class TransactionsLoader extends AsyncTaskLoader<List<Transaction>>
 	{
+		private final WalletApplication application;
 		private final Wallet wallet;
 		@CheckForNull
 		private final Direction direction;
 
-		private TransactionsLoader(final Context context, @Nonnull final Wallet wallet, @Nullable final Direction direction)
+		private TransactionsLoader(final Context context, @Nonnull final WalletApplication application, @Nullable final Direction direction)
 		{
 			super(context);
 
-			this.wallet = wallet;
+			this.application = application;
+			this.wallet = application.getWallet();
 			this.direction = direction;
 		}
 
@@ -398,19 +412,23 @@ public class TransactionsListFragment extends SherlockListFragment implements Lo
 			super.onStopLoading();
 		}
 
-		@Override
-		public List<Transaction> loadInBackground()
+		// Handles all actual business logic, extracted out and static to enable easier testing
+		public static List<Transaction> getTransactionList(Set<Transaction> allTransactions, Wallet wallet,
+														   PaymentChannelContractToCreatorMap contractToCreatorMap,
+														   @Nullable Direction direction)
 		{
-			final Set<Transaction> transactions = wallet.getTransactions(true);
-			final List<Transaction> filteredTransactions = new ArrayList<Transaction>(transactions.size());
+			final List<Transaction> filteredTransactions = new ArrayList<Transaction>(allTransactions.size());
 
 			try
 			{
-				for (final Transaction tx : transactions)
+				for (final Transaction tx : allTransactions)
 				{
 					final boolean sent = tx.getValue(wallet).signum() < 0;
 					if ((direction == Direction.RECEIVED && !sent) || direction == null || (direction == Direction.SENT && sent))
-						filteredTransactions.add(tx);
+					{
+						if (!shouldSuppressTx(contractToCreatorMap, tx))
+							filteredTransactions.add(tx);
+					}
 				}
 			}
 			catch (final ScriptException x)
@@ -423,6 +441,44 @@ public class TransactionsListFragment extends SherlockListFragment implements Lo
 			return filteredTransactions;
 		}
 
+		private static boolean shouldSuppressTx(PaymentChannelContractToCreatorMap contractToCreatorMap, Transaction tx)
+		{
+			// A payment channel is composed of two transactions: the contract, which puts money into a
+			// shared pot, and the refund, which settles the final balance on the blockchain. We don't
+			// want to show this complexity in the UI, so we render only the contract tx and suppress the
+			// refund tx. To find out if the current tx is a refund, we can see if it spends a contract.
+			//
+			// However, there is an edge case we must handle: if a payment channel is opened,
+			// closed and another one is opened, the second contract will spend the refund of the first. So
+			// we check for contract-ness first, and then refund-ness.
+			if (contractToCreatorMap.getCreatorApp(tx.getHash()) != null)
+				return false;
+
+			for (TransactionInput input : tx.getInputs())
+			{
+				final String creatorOfConnectedOutput = contractToCreatorMap.getCreatorApp(input.getOutpoint().getHash());
+				if (creatorOfConnectedOutput == null)
+					continue;
+				if (log.isDebugEnabled())
+				{
+					if (input.getConnectedOutput() != null)
+						log.debug("Skipping payment channel spend {} for '{}' with connected output {}",
+								tx.getHashAsString(), creatorOfConnectedOutput, input.getOutpoint().getHash());
+					else
+						log.debug("Skipping payment channel spend {} for '{}' without connected output {}",
+								tx.getHashAsString(), creatorOfConnectedOutput, input.getOutpoint().getHash());
+				}
+				return true;
+			}
+			return false;
+		}
+
+		@Override
+		public List<Transaction> loadInBackground()
+		{
+			return getTransactionList(wallet.getTransactions(true), wallet, application.getContractHashToCreatorMap(), direction);
+		}
+
 		private final ThrottlingWalletChangeListener transactionAddRemoveListener = new ThrottlingWalletChangeListener(THROTTLE_MS, true, true,
 				false)
 		{
@@ -433,7 +489,7 @@ public class TransactionsListFragment extends SherlockListFragment implements Lo
 			}
 		};
 
-		private static final Comparator<Transaction> TRANSACTION_COMPARATOR = new Comparator<Transaction>()
+		@VisibleForTesting static final Comparator<Transaction> TRANSACTION_COMPARATOR = new Comparator<Transaction>()
 		{
 			@Override
 			public int compare(final Transaction tx1, final Transaction tx2)

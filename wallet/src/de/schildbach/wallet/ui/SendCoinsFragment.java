@@ -51,7 +51,6 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
-import android.view.View.MeasureSpec;
 import android.view.View.OnClickListener;
 import android.view.View.OnFocusChangeListener;
 import android.view.ViewGroup;
@@ -62,7 +61,6 @@ import android.widget.CompoundButton;
 import android.widget.CompoundButton.OnCheckedChangeListener;
 import android.widget.CursorAdapter;
 import android.widget.ListView;
-import android.widget.PopupWindow;
 import android.widget.TextView;
 
 import com.actionbarsherlock.app.SherlockFragment;
@@ -89,7 +87,6 @@ import de.schildbach.wallet.WalletApplication;
 import de.schildbach.wallet.integration.android.BitcoinIntegration;
 import de.schildbach.wallet.offline.SendBluetoothRunnable;
 import de.schildbach.wallet.ui.InputParser.StringInputParser;
-import de.schildbach.wallet.util.GenericUtils;
 import de.schildbach.wallet.util.WalletUtils;
 import de.schildbach.wallet_test.R;
 
@@ -125,9 +122,7 @@ public final class SendCoinsFragment extends SherlockFragment
 	private Button viewGo;
 	private Button viewCancel;
 
-	private TextView popupMessageView;
-	private View popupAvailableView;
-	private PopupWindow popupWindow;
+	private BalanceValidationPopup balanceValidationPopup;
 
 	private CurrencyCalculatorLink amountCalculatorLink;
 
@@ -167,7 +162,7 @@ public final class SendCoinsFragment extends SherlockFragment
 		@Override
 		public void afterTextChanged(final Editable s)
 		{
-			dismissPopup();
+			balanceValidationPopup.dismissPopup();
 
 			validateReceivingAddress(false);
 		}
@@ -253,7 +248,7 @@ public final class SendCoinsFragment extends SherlockFragment
 		@Override
 		public void changed()
 		{
-			dismissPopup();
+			balanceValidationPopup.dismissPopup();
 
 			validateAmounts(false);
 		}
@@ -465,9 +460,7 @@ public final class SendCoinsFragment extends SherlockFragment
 			}
 		});
 
-		popupMessageView = (TextView) inflater.inflate(R.layout.send_coins_popup_message, container);
-
-		popupAvailableView = inflater.inflate(R.layout.send_coins_popup_available, container);
+		balanceValidationPopup = new BalanceValidationPopup(inflater, container, activity);
 
 		if (savedInstanceState != null)
 		{
@@ -557,6 +550,8 @@ public final class SendCoinsFragment extends SherlockFragment
 		amountCalculatorLink.setListener(null);
 
 		contentResolver.unregisterContentObserver(contentObserver);
+
+		balanceValidationPopup.dismissPopup();
 
 		super.onPause();
 	}
@@ -705,14 +700,18 @@ public final class SendCoinsFragment extends SherlockFragment
 				{
 					// address is valid, but from different known network
 					if (popups)
-						popupMessage(receivingAddressView,
-								getString(R.string.send_coins_fragment_receiving_address_error_cross_network, addressParams.getId()));
+					{
+						final String str = getString(R.string.send_coins_fragment_receiving_address_error_cross_network, addressParams.getId());
+						balanceValidationPopup.popupMessage(receivingAddressView, str, getView().getWidth());
+					}
 				}
 				else if (addressParams == null)
 				{
 					// address is valid, but from different unknown network
-					if (popups)
-						popupMessage(receivingAddressView, getString(R.string.send_coins_fragment_receiving_address_error_cross_network_unknown));
+					if (popups) {
+						final String str = getString(R.string.send_coins_fragment_receiving_address_error_cross_network_unknown);
+						balanceValidationPopup.popupMessage(receivingAddressView, str, getView().getWidth());
+					}
 				}
 				else
 				{
@@ -730,8 +729,10 @@ public final class SendCoinsFragment extends SherlockFragment
 		catch (final AddressFormatException x)
 		{
 			// could not decode address at all
-			if (popups)
-				popupMessage(receivingAddressView, getString(R.string.send_coins_fragment_receiving_address_error));
+			if (popups) {
+				final String str = getString(R.string.send_coins_fragment_receiving_address_error);
+				balanceValidationPopup.popupMessage(receivingAddressView, str, getView().getWidth());
+			}
 		}
 
 		updateView();
@@ -747,7 +748,10 @@ public final class SendCoinsFragment extends SherlockFragment
 		{
 			// empty amount
 			if (popups)
-				popupMessage(amountCalculatorLink.activeView(), getString(R.string.send_coins_fragment_amount_empty));
+			{
+				final String str = getString(R.string.send_coins_fragment_amount_empty);
+				balanceValidationPopup.popupMessage(amountCalculatorLink.activeView(), str, getView().getWidth());
+			}
 		}
 		else if (amount.signum() > 0)
 		{
@@ -768,62 +772,20 @@ public final class SendCoinsFragment extends SherlockFragment
 			{
 				// not enough funds for amount
 				if (popups)
-					popupAvailable(amountCalculatorLink.activeView(), available, pending);
+					balanceValidationPopup.popupAvailable(amountCalculatorLink.activeView(), available, pending);
 			}
 		}
 		else
 		{
 			// invalid amount
 			if (popups)
-				popupMessage(amountCalculatorLink.activeView(), getString(R.string.send_coins_fragment_amount_error));
+			{
+				final String string = getString(R.string.send_coins_fragment_amount_error);
+				balanceValidationPopup.popupMessage(amountCalculatorLink.activeView(), string, getView().getWidth());
+			}
 		}
 
 		updateView();
-	}
-
-	private void popupMessage(@Nonnull final View anchor, @Nonnull final String message)
-	{
-		dismissPopup();
-
-		popupMessageView.setText(message);
-		popupMessageView.setMaxWidth(getView().getWidth());
-
-		popup(anchor, popupMessageView);
-	}
-
-	private void popupAvailable(@Nonnull final View anchor, @Nonnull final BigInteger available, @Nonnull final BigInteger pending)
-	{
-		dismissPopup();
-
-		final CurrencyTextView viewAvailable = (CurrencyTextView) popupAvailableView.findViewById(R.id.send_coins_popup_available_amount);
-		viewAvailable.setPrefix(Constants.CURRENCY_CODE_BITCOIN);
-		viewAvailable.setAmount(available);
-
-		final TextView viewPending = (TextView) popupAvailableView.findViewById(R.id.send_coins_popup_available_pending);
-		viewPending.setVisibility(pending.signum() > 0 ? View.VISIBLE : View.GONE);
-		viewPending.setText(getString(R.string.send_coins_fragment_pending, GenericUtils.formatValue(pending, Constants.BTC_MAX_PRECISION)));
-
-		popup(anchor, popupAvailableView);
-	}
-
-	private void popup(@Nonnull final View anchor, @Nonnull final View contentView)
-	{
-		contentView.measure(MeasureSpec.makeMeasureSpec(MeasureSpec.UNSPECIFIED, 0), MeasureSpec.makeMeasureSpec(MeasureSpec.UNSPECIFIED, 0));
-
-		popupWindow = new PopupWindow(contentView, contentView.getMeasuredWidth(), contentView.getMeasuredHeight(), false);
-		popupWindow.showAsDropDown(anchor);
-
-		// hack
-		contentView.setBackgroundResource(popupWindow.isAboveAnchor() ? R.drawable.popup_frame_above : R.drawable.popup_frame_below);
-	}
-
-	private void dismissPopup()
-	{
-		if (popupWindow != null)
-		{
-			popupWindow.dismiss();
-			popupWindow = null;
-		}
 	}
 
 	private void handleGo()

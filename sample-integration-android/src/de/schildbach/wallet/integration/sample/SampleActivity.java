@@ -1,5 +1,6 @@
 /**
  * Copyright 2012-2013 the original author or authors.
+ * Copyright 2013 Google Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,11 +35,11 @@ import de.schildbach.wallet.integration.android.BitcoinIntegration;
  */
 public class SampleActivity extends Activity
 {
-	private static final String DONATION_ADDRESS = "1PZmMahjbfsTy6DsaRyfStzoWTPppWwDnZ"; // prodnet
-	// private static final String DONATION_ADDRESS = "mwEacn7pYszzxfgcNaVUzYvzL6ypRJzB6A"; // testnet
-	private static final int REQUEST_CODE = 0;
+	private static final boolean testNet = true;
+	private static final String DONATION_ADDRESS = testNet ? "mwEacn7pYszzxfgcNaVUzYvzL6ypRJzB6A" : "1PZmMahjbfsTy6DsaRyfStzoWTPppWwDnZ";
+	private static final int DONATION_REQUEST_CODE = 0;
 
-	private Button donateButton;
+    private Button donateButton;
 	private TextView donateMessage;
 
 	@Override
@@ -54,17 +55,24 @@ public class SampleActivity extends Activity
 		{
 			public void onClick(final View v)
 			{
-				BitcoinIntegration.requestForResult(SampleActivity.this, REQUEST_CODE, DONATION_ADDRESS);
+				BitcoinIntegration.requestForResult(SampleActivity.this, DONATION_REQUEST_CODE, DONATION_ADDRESS);
 			}
 		});
 
 		donateMessage = (TextView) findViewById(R.id.sample_donate_message);
+
+        Button channelsbutton = (Button) findViewById(R.id.open_channels_activity);
+        channelsbutton.setOnClickListener(new OnClickListener() {
+            public void onClick(View view) {
+                startActivity(new Intent(SampleActivity.this, PaymentChannelActivity.class));
+            }
+        });
 	}
 
-	@Override
+    @Override
 	protected void onActivityResult(final int requestCode, final int resultCode, final Intent data)
 	{
-		if (requestCode == REQUEST_CODE)
+		if (requestCode == DONATION_REQUEST_CODE)
 		{
 			if (resultCode == Activity.RESULT_OK)
 			{

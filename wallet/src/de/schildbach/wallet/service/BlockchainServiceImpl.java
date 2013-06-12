@@ -1,5 +1,6 @@
 /*
  * Copyright 2011-2013 the original author or authors.
+ * Copyright 2013 Google Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,6 +36,7 @@ import javax.annotation.CheckForNull;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,17 +65,23 @@ import android.preference.PreferenceManager;
 import android.support.v4.app.NotificationCompat;
 import android.text.format.DateUtils;
 
+import com.google.bitcoin.core.AbstractBlockChainListener;
 import com.google.bitcoin.core.AbstractPeerEventListener;
 import com.google.bitcoin.core.Address;
 import com.google.bitcoin.core.Block;
 import com.google.bitcoin.core.BlockChain;
 import com.google.bitcoin.core.CheckpointManager;
+import com.google.bitcoin.core.BloomFilter;
 import com.google.bitcoin.core.Peer;
 import com.google.bitcoin.core.PeerEventListener;
+import com.google.bitcoin.core.PeerFilterProvider;
 import com.google.bitcoin.core.PeerGroup;
 import com.google.bitcoin.core.ScriptException;
+import com.google.bitcoin.core.Sha256Hash;
 import com.google.bitcoin.core.StoredBlock;
 import com.google.bitcoin.core.Transaction;
+import com.google.bitcoin.core.TransactionInput;
+import com.google.bitcoin.core.TransactionOutPoint;
 import com.google.bitcoin.core.TransactionConfidence.ConfidenceType;
 import com.google.bitcoin.core.Wallet;
 import com.google.bitcoin.core.Wallet.BalanceType;
@@ -84,6 +92,8 @@ import com.google.bitcoin.discovery.PeerDiscoveryException;
 import com.google.bitcoin.store.BlockStore;
 import com.google.bitcoin.store.BlockStoreException;
 import com.google.bitcoin.store.SPVBlockStore;
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.util.concurrent.ListenableFuture;
 
 import de.schildbach.wallet.Constants;
 import de.schildbach.wallet.WalletApplication;
@@ -91,6 +101,7 @@ import de.schildbach.wallet.WalletBalanceWidgetProvider;
 import de.schildbach.wallet.ui.WalletActivity;
 import de.schildbach.wallet.util.CrashReporter;
 import de.schildbach.wallet.util.GenericUtils;
+import de.schildbach.wallet.util.PaymentChannelContractToCreatorMap;
 import de.schildbach.wallet.util.ThrottlingWalletChangeListener;
 import de.schildbach.wallet.util.WalletUtils;
 import de.schildbach.wallet_test.R;
@@ -114,7 +125,7 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 	private WakeLock wakeLock;
 	private WifiLock wifiLock;
 
-	private PeerConnectivityListener peerConnectivityListener;
+	private PeerGroupListener peerGroupListener;
 	private NotificationManager nm;
 	private static final int NOTIFICATION_ID_CONNECTED = 0;
 	private static final int NOTIFICATION_ID_COINS_RECEIVED = 1;
@@ -150,30 +161,21 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 
 			final int bestChainHeight = blockChain.getBestChainHeight();
 
-			try
+			handler.post(new Runnable()
 			{
-				final Address from = WalletUtils.getFromAddress(tx);
-				final BigInteger amount = tx.getValue(wallet);
-				final ConfidenceType confidenceType = tx.getConfidence().getConfidenceType();
-
-				handler.post(new Runnable()
+				@Override
+				public void run()
 				{
-					@Override
-					public void run()
-					{
-						final boolean isReceived = amount.signum() > 0;
-						final boolean replaying = bestChainHeight < bestChainHeightEver;
-						final boolean isReplayedTx = confidenceType == ConfidenceType.BUILDING && replaying;
-
-						if (isReceived && !isReplayedTx)
-							notifyCoinsReceived(from, amount);
+					final BigInteger amount;
+					try {
+						amount = tx.getValue(wallet);
+					} catch (ScriptException e) {
+						throw new RuntimeException(e);
 					}
-				});
-			}
-			catch (final ScriptException x)
-			{
-				throw new RuntimeException(x);
-			}
+					if (shouldNotifyForTransaction(tx, bestChainHeight, bestChainHeightEver, amount, application.getContractHashToCreatorMap()))
+						notifyCoinsReceived(WalletUtils.getFromAddress(tx), amount);
+				}
+			});
 		}
 
 		@Override
@@ -182,6 +184,66 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 			transactionsReceived.incrementAndGet();
 		}
 	};
+
+	/**
+	 * A provider which puts all channel contract outpoints in the bloom filter. This fixes a rare race which can occur
+	 * if the channel contract is confirmed, then the app is restarted (or all its Peer connections are killed), then
+	 * the channel is closed, at which point the contract outpoint is not in Peer bloom filters (and will thus be
+	 * missed, causing the contract to appear in the transaction list as "may be refunded" forever)
+	 */
+	@VisibleForTesting
+	public static class ContractFilterProvider implements PeerFilterProvider {
+		private final PaymentChannelContractToCreatorMap contractToCreatorMap;
+
+		public ContractFilterProvider(PaymentChannelContractToCreatorMap contractToCreatorMap) {
+			this.contractToCreatorMap = contractToCreatorMap;
+		}
+
+		@Override
+		public long getEarliestKeyCreationTime() {
+			return Long.MAX_VALUE;
+		}
+
+		@Override
+		public int getBloomFilterElementCount() {
+			return contractToCreatorMap.numContracts();
+		}
+
+		@Override
+		public BloomFilter getBloomFilter(int size, double falsePositiveRate, long nTweak) {
+			BloomFilter filter = new BloomFilter(size, falsePositiveRate, nTweak);
+			for (Sha256Hash contractHash : contractToCreatorMap.getContractSet())
+				filter.insert(new TransactionOutPoint(Constants.NETWORK_PARAMETERS, 0, contractHash).bitcoinSerialize());
+			return filter;
+		}
+	}
+
+	// Abstracted out from the walletEventListener for testing
+	/**
+	 * Determines if we should generate a "you got coins" notification for the given transaction.
+	 * Does not generate a notification for payment channel transactions, when we are replaying the chain, or if we sent
+	 * the transaction ourself.
+	 */
+	public static boolean shouldNotifyForTransaction(Transaction tx, int bestChainHeight, int bestChainHeightEver,
+													 BigInteger amount, PaymentChannelContractToCreatorMap contractToCreatorMap) {
+		final ConfidenceType confidenceType = tx.getConfidence().getConfidenceType();
+
+		final boolean isReceived = amount.signum() > 0;
+		final boolean replaying = bestChainHeight < bestChainHeightEver;
+		final boolean isReplayedTx = confidenceType == ConfidenceType.BUILDING && replaying;
+		boolean isPaymentChannelRefund = false;
+		for (TransactionInput input : tx.getInputs()) {
+			if (input.getOutpoint().getIndex() == 0 &&
+					contractToCreatorMap.getCreatorApp(input.getOutpoint().getHash()) != null)
+				isPaymentChannelRefund = true;
+		}
+
+		log.info("Got a shouldNotifyForTransaction event for transaction with hash " + tx.getHash() +
+				"\n	isReceived: " + isReceived + ", replaying: " + replaying +
+				"\n	isReplayedTx: " + isReplayedTx + ", isPaymentChannelRefund: " + isPaymentChannelRefund);
+
+		return isReceived && !isReplayedTx && !isPaymentChannelRefund;
+	}
 
 	private void notifyCoinsReceived(@Nullable final Address from, @Nonnull final BigInteger amount)
 	{
@@ -228,12 +290,15 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 		nm.notify(NOTIFICATION_ID_COINS_RECEIVED, notification.getNotification());
 	}
 
-	private final class PeerConnectivityListener extends AbstractPeerEventListener implements OnSharedPreferenceChangeListener
+	/**
+	 * Keeps track of connected peer counts and watches for payment channel contract transaction spends
+	 */
+	private final class PeerGroupListener extends AbstractPeerEventListener implements OnSharedPreferenceChangeListener
 	{
 		private int peerCount;
 		private AtomicBoolean stopped = new AtomicBoolean(false);
 
-		public PeerConnectivityListener()
+		public PeerGroupListener()
 		{
 			prefs.registerOnSharedPreferenceChangeListener(this);
 		}
@@ -245,6 +310,11 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 			prefs.unregisterOnSharedPreferenceChangeListener(this);
 
 			nm.cancel(NOTIFICATION_ID_CONNECTED);
+		}
+
+		@Override
+		public void onTransaction(Peer peer, Transaction t) {
+			application.getContractHashToCreatorMap().checkContractSpent(t);
 		}
 
 		@Override
@@ -393,7 +463,14 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 				peerGroup = new PeerGroup(Constants.NETWORK_PARAMETERS, blockChain);
 				peerGroup.addWallet(wallet);
 				peerGroup.setUserAgent(Constants.USER_AGENT, application.packageInfo().versionName);
-				peerGroup.addEventListener(peerConnectivityListener);
+				peerGroup.addEventListener(peerGroupListener);
+				peerGroup.addPeerFilterProvider(new ContractFilterProvider(application.getContractHashToCreatorMap()));
+				application.getContractHashToCreatorMap().setNewContractCallback(new Runnable() {
+					@Override
+					public void run() {
+						peerGroup.recalculateFastCatchupAndFilter();
+					}
+				});
 
 				final int maxConnectedPeers = application.maxConnectedPeers();
 
@@ -451,8 +528,9 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 			else if (!hasEverything && peerGroup != null)
 			{
 				log.info("stopping peergroup");
-				peerGroup.removeEventListener(peerConnectivityListener);
+				peerGroup.removeEventListener(peerGroupListener);
 				peerGroup.removeWallet(wallet);
+				application.getContractHashToCreatorMap().setNewContractCallback(null);
 				peerGroup.stop();
 				peerGroup = null;
 
@@ -556,7 +634,7 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 		}
 	}
 
-	private final IBinder mBinder = new LocalBinder();
+	@VisibleForTesting final IBinder mBinder = new LocalBinder();
 
 	@Override
 	public IBinder onBind(final Intent intent)
@@ -599,7 +677,7 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 
 		bestChainHeightEver = prefs.getInt(Constants.PREFS_KEY_BEST_CHAIN_HEIGHT_EVER, 0);
 
-		peerConnectivityListener = new PeerConnectivityListener();
+		peerGroupListener = new PeerGroupListener();
 
 		sendBroadcastPeerState(0);
 
@@ -661,6 +739,16 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 			throw new Error("blockchain cannot be created", x);
 		}
 
+		blockChain.addListener(new AbstractBlockChainListener() {
+			@Override
+			public boolean isTransactionRelevant(Transaction tx) throws ScriptException {
+				// Do the actual processing in isTransactionRelevant because we don't care about the transaction beyond
+				// the fact that it exists and spends one of our payment channel multisig contracts
+				application.getContractHashToCreatorMap().checkContractSpent(tx);
+				return false;
+			}
+		});
+
 		application.getWallet().addEventListener(walletEventListener);
 
 		registerReceiver(tickReceiver, new IntentFilter(Intent.ACTION_TIME_TICK));
@@ -713,14 +801,15 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 
 		if (peerGroup != null)
 		{
-			peerGroup.removeEventListener(peerConnectivityListener);
+			peerGroup.removeEventListener(peerGroupListener);
 			peerGroup.removeWallet(application.getWallet());
+			application.getContractHashToCreatorMap().setNewContractCallback(null);
 			peerGroup.stopAndWait();
 
 			log.info("peergroup stopped");
 		}
 
-		peerConnectivityListener.stop();
+		peerGroupListener.stop();
 
 		unregisterReceiver(connectivityReceiver);
 
@@ -773,10 +862,11 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 	}
 
 	@Override
-	public void broadcastTransaction(final Transaction tx)
+	public ListenableFuture<Transaction> broadcastTransaction(final Transaction tx)
 	{
 		if (peerGroup != null)
-			peerGroup.broadcastTransaction(tx);
+			return peerGroup.broadcastTransaction(tx);
+		return null;
 	}
 
 	@Override

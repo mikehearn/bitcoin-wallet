@@ -18,10 +18,7 @@
 
 package de.schildbach.wallet.ui;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
+import java.util.*;
 import java.util.Map;
 import java.util.Set;
 
@@ -412,7 +409,8 @@ public final class BlockListFragment extends SherlockListFragment
 			for (final Transaction tx : transactions)
 			{
 				final Map<Sha256Hash, Integer> appearsIn = tx.getAppearsInHashes();
-				if (appearsIn != null && !appearsIn.isEmpty()) // TODO filter by updateTime
+				final Map<Sha256Hash,Integer> hashes = tx.getAppearsInHashes();
+				if (hashes != null && !hashes.isEmpty()) // TODO filter by updateTime
 					filteredTransactions.add(tx);
 			}
 

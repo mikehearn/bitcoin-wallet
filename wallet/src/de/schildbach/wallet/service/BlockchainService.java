@@ -1,5 +1,6 @@
 /*
  * Copyright 2012-2013 the original author or authors.
+ * Copyright 2013 Google Inc.
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,7 +26,7 @@ import javax.annotation.Nonnull;
 import com.google.bitcoin.core.Peer;
 import com.google.bitcoin.core.StoredBlock;
 import com.google.bitcoin.core.Transaction;
-
+import com.google.common.util.concurrent.ListenableFuture;
 import de.schildbach.wallet_test.R;
 
 /**
@@ -49,7 +50,11 @@ public interface BlockchainService
 	public static final String ACTION_HOLD_WIFI_LOCK = R.class.getPackage().getName() + ".hold_wifi_lock";
 	public static final String ACTION_RESET_BLOCKCHAIN = R.class.getPackage().getName() + ".reset_blockchain";
 
-	void broadcastTransaction(@Nonnull Transaction tx);
+	/**
+	 * Returns either a future which finishes when the transaction is successfully broadcast on the network, or null if
+	 * the PeerGroup cannot start right now.
+	 */
+	ListenableFuture<Transaction> broadcastTransaction(@Nonnull Transaction tx);
 
 	@CheckForNull
 	List<Peer> getConnectedPeers();

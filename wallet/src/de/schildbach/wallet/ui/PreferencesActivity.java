@@ -57,6 +57,7 @@ public final class PreferencesActivity extends SherlockPreferenceActivity implem
 	private static final String PREFS_KEY_REPORT_ISSUE = "report_issue";
 	private static final String PREFS_KEY_INITIATE_RESET = "initiate_reset";
 	private static final String PREFS_KEY_DATA_USAGE = "data_usage";
+	private static final String PREFS_APP_PERMISSIONS = "app_permissions";
 
 	private static final Intent dataUsageIntent = new Intent();
 	static
@@ -118,6 +119,11 @@ public final class PreferencesActivity extends SherlockPreferenceActivity implem
 	{
 		final String key = preference.getKey();
 
+		if (PREFS_APP_PERMISSIONS.equals(key))
+		{
+			startActivity(new Intent(this, AppPermissionsActivity.class));
+			finish();
+		}
 		if (PREFS_KEY_DATA_USAGE.equals(key))
 		{
 			startActivity(dataUsageIntent);
