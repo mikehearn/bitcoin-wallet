@@ -23,6 +23,11 @@
 			android:key="data_usage"
 			android:summary="@string/preferences_data_usage_summary"
 			android:title="@string/preferences_data_usage_title" />
+
+        <Preference
+            android:key="app_permissions"
+            android:summary="@string/preferences_app_permissions_summary"
+            android:title="@string/preferences_app_permissions_title"/>
 	</PreferenceCategory>
 	<PreferenceCategory android:title="@string/preferences_category_diagnostics" >
 		<Preference

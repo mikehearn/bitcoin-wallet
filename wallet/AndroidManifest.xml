@@ -169,8 +169,12 @@
 			android:stateNotNeeded="true"
 			android:theme="@style/My.Theme.Fullscreen"
 			android:windowSoftInputMode="stateAlwaysHidden" />
+		<activity
+			android:name="de.schildbach.wallet.ui.AppPermissionsActivity"
+			android:label="@string/app_permissions_activity_title"
+			android:screenOrientation="behind"/>
 
-		<provider
+        <provider
 			android:name="de.schildbach.wallet.AddressBookProvider"
 			android:authorities="de.schildbach.wallet_test.address_book"
 			android:exported="false" />

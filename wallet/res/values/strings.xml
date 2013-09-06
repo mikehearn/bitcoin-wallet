@@ -195,6 +195,11 @@
 	<string name="channel_request_intro">%1$s would like to temporarily reserve at least %2$s %3$s from your wallet. Any unused money will be released back to your wallet. If you would like to allow the app to spend more without asking, you may specify a larger amount below.</string>
 	<string name="channel_request_max_payment">Maximum amount to pay</string>
 	<string name="send_coins_fragment_channel_label">Minimum for app</string>
+	<string name="app_permissions_activity_title">Permissions</string>
+	<string name="preferences_app_permissions_summary">Control which apps are allowed to use your money</string>
+	<string name="preferences_app_permissions_title">App permissions</string>
+    <string name="app_permissions_subline">BTC %1$s can be spent by this app. BTC %1$s spent so far.</string>
+
 
 	<!-- generic buttons -->
 	<string name="button_ok">OK</string>

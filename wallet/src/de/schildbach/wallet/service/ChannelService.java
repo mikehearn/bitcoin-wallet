@@ -56,7 +56,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
 /**
- * A service that keeps a set of channels and handles application access to those
+ * A service that keeps a set of channels and handles application access to them.
  */
 public class ChannelService extends Service {
 	@VisibleForTesting final ReentrantLock lock = Threading.lock("bitcoin-wallet-channelservice");
@@ -81,7 +81,10 @@ public class ChannelService extends Service {
 	// Maps unique IDs to LocalBinders which hold the app connection
 	@GuardedBy("lock") private Map<String, ChannelAndMetadata> cookieToChannelMap = new HashMap<String, ChannelAndMetadata>();
 
-	private static final String PREFS_NAME = ChannelService.class.getName() + ".APP_TO_VALUE_REMAINING_PREFS";
+	// This is also accessed from the app permissions activity. It's just a map of app id to long (amount of credit
+	// remaining).
+	public static final String PREFS_NAME = ChannelService.class.getName() + ".APP_TO_VALUE_REMAINING_PREFS";
+
 	// Maps app package name to its value remaining
 	@GuardedBy("lock") private SharedPreferences appToValueRemaining;
 	@GuardedBy("lock") @VisibleForTesting long incrementAndGet(String appId, long value) {
