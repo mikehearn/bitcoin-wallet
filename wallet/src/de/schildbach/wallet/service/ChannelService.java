@@ -235,12 +235,15 @@ public class ChannelService extends Service {
 			}
 			if (appName == null) appName = appId;
 
-			lock.lock();
+            final ChannelAndMetadata channel = new ChannelAndMetadata(listener, hostId);
+            channel.appId = appId;
+            channel.appName = appName;
+
+            watchForDeath(listener, channel);
+
+            lock.lock();
 			try {
 				long valueRemaining = getAppValueRemaining(appId);
-				ChannelAndMetadata channel = new ChannelAndMetadata(listener, hostId);
-				channel.appId = appId;
-				channel.appName = appName;
 				String cookie = UUID.randomUUID().toString();
 				cookieToChannelMap.put(cookie, channel);
 				log.info("Opening new channel of {} satoshis for app {}", valueRemaining, appId);
@@ -251,7 +254,27 @@ public class ChannelService extends Service {
 			}
 		}
 
-		@Override
+        private void watchForDeath(IChannelCallback listener, final ChannelAndMetadata channel) {
+            // We need to find out if the connected app goes away so we can mark the channel as inactive.
+            // Arguably, the payment channels framework should not attempt to prevent concurrent use of
+            // channels by apps because mutual exclusion is better done at higher levels, but it does and
+            // revisiting that decision must come in a later version.
+            try {
+                listener.asBinder().linkToDeath(new DeathRecipient() {
+                    @Override
+                    public void binderDied() {
+                        log.info("Connected app '{}' died, marking channel {} as inactive", channel.appName, channel.hostId);
+                        channel.client.connectionClosed();
+                    }
+                }, 0);
+            } catch (RemoteException e) {
+                // Race: calling process died whilst we're in the middle of processing its RPC :( Doesn't make sense
+                // to proceed at this point.
+                throw new RuntimeException(e);
+            }
+        }
+
+        @Override
 		public long payServer(String id, long amount) {
 			if (id == null || amount < 0)
 				return ChannelConstants.INVALID_REQUEST;
