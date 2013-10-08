@@ -1,13 +1,16 @@
 package de.schildbach.wallet.integration.android;
 
-import java.io.*;
+import android.util.Log;
+
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.EOFException;
+import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketAddress;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
-
-import android.util.Log;
 
 import static com.google.common.base.Preconditions.checkState;
 
@@ -20,7 +23,7 @@ public abstract class AbstractTCPPaymentChannel implements ChannelListener {
 
 	protected BitcoinPaymentChannelManager channel;
     protected Thread readThread;
-    protected Socket socket;
+    protected Socket socket = null;
 
     protected SocketAddress remoteAddress;
     protected int connectTimeoutMillis;
@@ -28,23 +31,26 @@ public abstract class AbstractTCPPaymentChannel implements ChannelListener {
 
     protected boolean gaveupConnecting = false;
 
+    private volatile boolean vClosing = false;
+
 	private synchronized void closeSocket() {
 		try {
-			if (socket != null)
+            vClosing = true;
+			if (socket != null) {
 				socket.close();
-		} catch (IOException e) {
-			// Ignore exceptions closing, we're creating a new one anyway
-		}
+                socket = null;
+            }
 
-		if (readThread != null) {
-			readThread.interrupt();
-			try {
-				readThread.join();
-			} catch (InterruptedException e) {
-				throw new RuntimeException(e); // Shouldn't happen
-			}
-		}
-	}
+            if (readThread != null) {
+                // Wait for the background thread to try reading from a closed socket, fail and quit.
+                readThread.join();
+            }
+        } catch (IOException e) {
+            // Ignore exceptions closing, we're creating a new one anyway
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
 
 	private synchronized void openSocket() throws IOException {
 		if (gaveupConnecting)
@@ -85,7 +91,10 @@ public abstract class AbstractTCPPaymentChannel implements ChannelListener {
 						channel.messageReceived(message);
 					}
 				} catch (final IOException e) {
-					Log.e(TAG, "Got IOException reading from socket", e);
+                    if (!vClosing)
+					    Log.e(TAG, "Got IOException reading from socket", e);
+                    else
+                        Log.i(TAG, "Payment TCP network thread finishing");
 					channel.disconnectFromWallet(false);
 				}
 			}
@@ -114,20 +123,23 @@ public abstract class AbstractTCPPaymentChannel implements ChannelListener {
 	public synchronized void sendProtobuf(byte[] protobuf) {
 		checkState(protobuf.length <= Short.MAX_VALUE && channel != null);
 		try {
-			DataOutputStream stream = new DataOutputStream(socket.getOutputStream());
-			stream.writeInt(protobuf.length);
-			stream.write(protobuf);
+            if (socket != null) {
+                DataOutputStream stream = new DataOutputStream(socket.getOutputStream());
+                stream.writeInt(protobuf.length);
+                stream.write(protobuf);
+                return;
+            }
 		} catch (final IOException e) {
 			Log.e(TAG, "Got IOException writing to socket, queuing and opening new socket", e);
-			protobufsToSend.add(protobuf);
-			try {
-				openSocket();
-			} catch (IOException e1) {
-				Log.e(TAG, "Got IOException opening new socket, closing channel", e);
-				gaveupConnecting = true;
-				channel.closeChannel();
-			}
 		}
+        protobufsToSend.add(protobuf);
+        try {
+            openSocket();
+        } catch (IOException e1) {
+            Log.e(TAG, "Got IOException opening new socket, closing channel", e1);
+            gaveupConnecting = true;
+            channel.closeChannel();
+        }
 	}
 
 	public void channelClosedOrNotOpened(ChannelListener.CloseReason reason) {
