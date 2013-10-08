@@ -264,7 +264,14 @@ public class SampleActivity extends Activity
 		});
 	}
 
-	@Override
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (channel != null)
+            channel.disconnectFromWallet(false);
+    }
+
+    @Override
 	protected void onActivityResult(final int requestCode, final int resultCode, final Intent data)
 	{
 		if (requestCode == DONATION_REQUEST_CODE)
