@@ -17,17 +17,14 @@
 
 package de.schildbach.wallet.util;
 
-import java.io.*;
-import java.util.HashMap;
-import java.util.Set;
-
-import com.google.bitcoin.core.Transaction;
-import com.google.bitcoin.core.TransactionInput;
-import com.google.bitcoin.core.Sha256Hash;
-import com.google.bitcoin.core.Wallet;
-import com.google.bitcoin.core.WalletExtension;
+import com.google.bitcoin.core.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.*;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * Keeps track of which app opened a payment channel by the channel's contract hash
@@ -76,7 +73,7 @@ public class PaymentChannelContractToCreatorMap implements WalletExtension {
 			if (!contractHashToAppMap.containsKey(contractHash))
 				contractHashToAppMap.put(contractHash, new CreatorAndSpentFlag(appName));
 			containingWallet.addOrUpdateExtension(this);
-			runCallback= newContractCallback;
+			runCallback = newContractCallback;
 		}
 		if (runCallback != null)
 			runCallback.run();
@@ -104,8 +101,14 @@ public class PaymentChannelContractToCreatorMap implements WalletExtension {
 	 * Gets the set of contracts which are stored in this map
 	 */
 	public synchronized Set<Sha256Hash> getContractSet() {
-		return contractHashToAppMap.keySet();
+        // Copy the result because this class has to be thread safe, and iterating over the keySet here
+        // directly is leaking internal state that should be locked.
+		return new HashSet<Sha256Hash>(contractHashToAppMap.keySet());
 	}
+
+    public synchronized int numContracts() {
+        return contractHashToAppMap.size();
+    }
 
 	@Override
 	public String getWalletExtensionID() {

@@ -186,7 +186,8 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 	 */
 	@VisibleForTesting
 	public static class ContractFilterProvider implements PeerFilterProvider {
-		private PaymentChannelContractToCreatorMap contractToCreatorMap;
+		private final PaymentChannelContractToCreatorMap contractToCreatorMap;
+
 		public ContractFilterProvider(PaymentChannelContractToCreatorMap contractToCreatorMap) {
 			this.contractToCreatorMap = contractToCreatorMap;
 		}
@@ -198,13 +199,13 @@ public class BlockchainServiceImpl extends android.app.Service implements Blockc
 
 		@Override
 		public int getBloomFilterElementCount() {
-			return contractToCreatorMap.getContractSet().size();
+			return contractToCreatorMap.numContracts();
 		}
 
 		@Override
 		public BloomFilter getBloomFilter(int size, double falsePositiveRate, long nTweak) {
 			BloomFilter filter = new BloomFilter(size, falsePositiveRate, nTweak);
-			for(Sha256Hash contractHash : contractToCreatorMap.getContractSet())
+			for (Sha256Hash contractHash : contractToCreatorMap.getContractSet())
 				filter.insert(new TransactionOutPoint(Constants.NETWORK_PARAMETERS, 0, contractHash).bitcoinSerialize());
 			return filter;
 		}
