@@ -417,7 +417,7 @@ public final class BitcoinPaymentChannelManager
 	 */
 	public Future<Long> sendMoney(final long amount) {
 		return executorService.submit(new Callable<Long>() {
-            public Long call() {
+            public Long call() throws Exception {
                 return doSendMoney(amount);
             }
         });

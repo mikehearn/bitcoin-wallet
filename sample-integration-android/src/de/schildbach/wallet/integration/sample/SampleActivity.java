@@ -35,7 +35,6 @@ import android.widget.Toast;
 import de.schildbach.wallet.integration.android.AbstractTCPPaymentChannel;
 import de.schildbach.wallet.integration.android.BitcoinIntegration;
 import de.schildbach.wallet.integration.android.BitcoinPaymentChannelManager;
-import de.schildbach.wallet.integration.android.ChannelListener;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -46,7 +45,7 @@ import java.util.concurrent.ExecutionException;
  */
 public class SampleActivity extends Activity
 {
-	private static final String TAG = SampleActivity.class.getName();
+    private static final String TAG = SampleActivity.class.getName();
 
 	private static final boolean testNet = true;
 	private static final String DONATION_ADDRESS = testNet ? "mwEacn7pYszzxfgcNaVUzYvzL6ypRJzB6A" : "1PZmMahjbfsTy6DsaRyfStzoWTPppWwDnZ";
@@ -57,7 +56,22 @@ public class SampleActivity extends Activity
 	public static final int COIN = 10000000;
 	public static final int CENT = COIN / 100;
 
-	private Button donateButton;
+    // The minimum amount we're going to ask the user to authorize us for. In this case, 10 millibits. The server
+    // is allowed to have a minimum channel size it's willing to tolerate - if here we ask the user for less than
+    // what the server allows, the channel can fail to build entirely, so it's best if we're a bit pushy here and
+    // ask for more than we might really need. The user can of course choose to give us more on the permissions
+    // screen that will pop up.
+    //
+    // The ExamplePaymentChannelServer app in the bitcoinj distribution shows how to receive these micropayments,
+    // and it has a minimum required channel size of 1 millibit, so we're going to ask for 10x the min amount.
+    // This is NOT the minimum payment granularity - once the channel is established, we can make payments of a
+    // single satoshi if the server is willing, but because we must eventually settle on the block chain the total
+    // amount of value put into the channel must be at least the minimum allowed value for a transaction.
+    public static final long MIN_AUTH_REQ = CENT;
+    public static final int PAYMENT_SIZE = 30000;
+
+
+    private Button donateButton;
 	private TextView donateMessage;
 	private BitcoinPaymentChannelManager channel = null;
 	private Button openChannelButton;
@@ -113,7 +127,7 @@ public class SampleActivity extends Activity
                 // Pay at least this to avoid the case where not enough value is sent to actually
                 // close the channel. That can happen if the final contract transaction would have to pay more in fees
                 // than it's actually worth.
-                makePayment(30000);
+                makePayment(PAYMENT_SIZE);
 			}
         });
 		payChannelButton.setEnabled(false);
@@ -145,11 +159,19 @@ public class SampleActivity extends Activity
 
             @Override
             protected void onPostExecute(Long actualAmountSent) {
+                recordSpending(actualAmountSent);
+                if (getSpentSoFar() >= MIN_AUTH_REQ - PAYMENT_SIZE) {
+                    // The amount of money we have left on the channel is less than the size of the payment made by
+                    // pressing the button, so just go ahead and close at this point.
+                    channel.closeChannel();
+                    channel = null;
+                }
+
                 if (error != null) {
-                    Toast.makeText(SampleActivity.this, "Got error when sending: " + error, Toast.LENGTH_LONG);
+                    Toast.makeText(SampleActivity.this, "Got error when sending: " + error, Toast.LENGTH_LONG).show();
                 } else if (actualAmountSent != amount) {
                     Toast.makeText(SampleActivity.this,
-                            "Wanted to send " + amount + " but actually sent " + actualAmountSent, Toast.LENGTH_LONG);
+                            "Wanted to send " + amount + " but actually sent " + actualAmountSent, Toast.LENGTH_LONG).show();
                 }
             }
         };
@@ -160,19 +182,6 @@ public class SampleActivity extends Activity
         final String host = hostText.getText().toString();
 
         openChannelButton.setEnabled(false);
-
-        // The minimum amount we're going to ask the user to authorize us for. In this case, 10 millibits. The server
-        // is allowed to have a minimum channel size it's willing to tolerate - if here we ask the user for less than
-        // what the server allows, the channel can fail to build entirely, so it's best if we're a bit pushy here and
-        // ask for more than we might really need. The user can of course choose to give us more on the permissions
-        // screen that will pop up.
-        //
-        // The ExamplePaymentChannelServer app in the bitcoinj distribution shows how to receive these micropayments,
-        // and it has a minimum required channel size of 1 millibit, so we're going to ask for 10x the min amount.
-        // This is NOT the minimum payment granularity - once the channel is established, we can make payments of a
-        // single satoshi if the server is willing, but because we must eventually settle on the block chain the total
-        // amount of value put into the channel must be at least the minimum allowed value for a transaction.
-        final long MIN_AUTH_REQ = CENT;
 
         // When we call prepare, we must ask for how much money we'll want to be able to spend in this session. If we
         // have less, the user will be asked to authorize us. This means that if the user accepts our requested default,
@@ -193,82 +202,7 @@ public class SampleActivity extends Activity
         BitcoinPaymentChannelManager.prepare(this, valueToRequest, true, testNet, CHANNEL_REQUEST_CODE, new BitcoinPaymentChannelManager.PrepareCallback() {
             public void success() {
                 // We got authorized! Use the helper library to set up a simple TCP messaging socket.
-                AbstractTCPPaymentChannel channelListener = new AbstractTCPPaymentChannel(new InetSocketAddress(host, 4242), 15 * 1000) {
-                    boolean wasOpened = false;
-
-                    public void channelOpen(final byte[] contractHash) {
-                        if (contractHash.length != 32) {
-                            // A real app should securely contact the server and verify contractHash here
-                            channel.closeChannel();
-                            return;
-                        }
-                        wasOpened = true;
-                        SampleActivity.this.runOnUiThread(new Runnable() {
-                            public void run() {
-                                payChannelButton.setEnabled(true);
-                                closeChannelButton.setEnabled(true);
-                                hostText.setEnabled(false);
-                                Toast.makeText(SampleActivity.this, "Channel opened " + hexEncodeHash(contractHash), Toast.LENGTH_SHORT).show();
-                            }
-                        });
-                    }
-
-                    @Override
-                    public void channelInterrupted() {
-                        super.channelInterrupted();
-                        SampleActivity.this.runOnUiThread(new Runnable() {
-                            public void run() {
-                                Toast.makeText(SampleActivity.this, "Channel interrupted, will reconnect on pay", Toast.LENGTH_LONG).show();
-                            }
-                        });
-                    }
-
-                    @Override
-                    public void channelClosedOrNotOpened(final ChannelListener.CloseReason reason) {
-                        super.channelClosedOrNotOpened(reason);
-                        channel = null;
-                        SampleActivity.this.runOnUiThread(new Runnable() {
-                            public void run() {
-                                payChannelButton.setEnabled(false);
-                                closeChannelButton.setEnabled(false);
-                                openChannelButton.setEnabled(true);
-                                hostText.setEnabled(true);
-                                if (wasOpened)
-                                    Toast.makeText(SampleActivity.this, "Channel closed: " + reason, Toast.LENGTH_LONG).show();
-                                else
-                                    Toast.makeText(SampleActivity.this, "Channel failed to open: " + reason, Toast.LENGTH_LONG).show();
-                            }
-                        });
-                        // A real app may wish to retry opening a new channel here
-                    }
-                };
-                // And now make a payments manager that uses it. hostID is some arbitrary string that identifies the
-                // entity you're paying - normally just host+port suffices to identify the server, but it could be
-                // other things too.
-                final String hostId = host + 4242;
-                channel = new BitcoinPaymentChannelManager(SampleActivity.this, hostId, testNet, channelListener);
-                // Connect the TCP socket to the server.
-                try {
-                    channelListener.connect(channel);
-                } catch (final IOException e) {
-                    channel = null;
-                    SampleActivity.this.runOnUiThread(new Runnable() {
-                        public void run() {
-                            payChannelButton.setEnabled(false);
-                            closeChannelButton.setEnabled(false);
-                            openChannelButton.setEnabled(true);
-                            hostText.setEnabled(true);
-                            Toast.makeText(SampleActivity.this, "Failed to connect to server with exception " + e, Toast.LENGTH_LONG).show();
-                            Log.e(TAG, "Failed to connect to server", e);
-                        }
-                    });
-                    return;
-                }
-                // And now we have a working socket, start the process of talking to Bitcoin Wallet and getting the
-                // stuff we need to process micropayments. This line starts the logical communication between the
-                // different parts of the protocol, with the channelListener tying it all to the network (this is why
-                // there are two connect calls, which may seem confusing otherwise).
-                channel.connect();
+                startupPaymentChannel(host);
             }
 
             public void notifyUser(UIRequestReason reason) {
@@ -285,6 +219,85 @@ public class SampleActivity extends Activity
                 }
             }
         });
+    }
+
+    private void startupPaymentChannel(String host) {
+        AbstractTCPPaymentChannel channelListener = new AbstractTCPPaymentChannel(new InetSocketAddress(host, 4242), 15 * 1000) {
+            boolean wasOpened = false;
+
+            public void channelOpen(final byte[] contractHash) {
+                if (contractHash.length != 32) {
+                    // A real app should securely contact the server and verify contractHash here
+                    channel.closeChannel();
+                    return;
+                }
+                wasOpened = true;
+                SampleActivity.this.runOnUiThread(new Runnable() {
+                    public void run() {
+                        payChannelButton.setEnabled(true);
+                        closeChannelButton.setEnabled(true);
+                        hostText.setEnabled(false);
+                        Toast.makeText(SampleActivity.this, "Channel opened " + hexEncodeHash(contractHash), Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+
+            @Override
+            public void channelInterrupted() {
+                super.channelInterrupted();
+                SampleActivity.this.runOnUiThread(new Runnable() {
+                    public void run() {
+                        Toast.makeText(SampleActivity.this, "Channel interrupted, will reconnect on pay", Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+
+            @Override
+            public void channelClosedOrNotOpened(final CloseReason reason) {
+                super.channelClosedOrNotOpened(reason);
+                channel = null;
+                SampleActivity.this.runOnUiThread(new Runnable() {
+                    public void run() {
+                        payChannelButton.setEnabled(false);
+                        closeChannelButton.setEnabled(false);
+                        openChannelButton.setEnabled(true);
+                        hostText.setEnabled(true);
+                        if (wasOpened)
+                            Toast.makeText(SampleActivity.this, "Channel closed: " + reason, Toast.LENGTH_LONG).show();
+                        else
+                            Toast.makeText(SampleActivity.this, "Channel failed to open: " + reason, Toast.LENGTH_LONG).show();
+                    }
+                });
+                // A real app may wish to retry opening a new channel here
+            }
+        };
+        // And now make a payments manager that uses it. hostID is some arbitrary string that identifies the
+        // entity you're paying - normally just host+port suffices to identify the server, but it could be
+        // other things too.
+        final String hostId = host + 4242;
+        channel = new BitcoinPaymentChannelManager(SampleActivity.this, hostId, testNet, channelListener);
+        // Connect the TCP socket to the server.
+        try {
+            channelListener.connect(channel);
+        } catch (final IOException e) {
+            channel = null;
+            SampleActivity.this.runOnUiThread(new Runnable() {
+                public void run() {
+                    payChannelButton.setEnabled(false);
+                    closeChannelButton.setEnabled(false);
+                    openChannelButton.setEnabled(true);
+                    hostText.setEnabled(true);
+                    Toast.makeText(SampleActivity.this, "Failed to connect to server with exception " + e, Toast.LENGTH_LONG).show();
+                    Log.e(TAG, "Failed to connect to server", e);
+                }
+            });
+            return;
+        }
+        // And now we have a working socket, start the process of talking to Bitcoin Wallet and getting the
+        // stuff we need to process micropayments. This line starts the logical communication between the
+        // different parts of the protocol, with the channelListener tying it all to the network (this is why
+        // there are two connect calls, which may seem confusing otherwise).
+        channel.connect();
     }
 
     @Override

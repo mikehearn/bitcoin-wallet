@@ -296,7 +296,7 @@ public class ChannelService extends Service {
 
 				long valueRemaining = getAppValueRemaining(channel.appId);
 				if (valueRemaining < amount) {
-					log.error("App requested {} but remaining user-allowed value is {}", valueRemaining);
+					log.error("App requested {} but remaining user-allowed value is {}", amount, valueRemaining);
                     return ChannelConstants.INSUFFICIENT_VALUE;
 				}
 
