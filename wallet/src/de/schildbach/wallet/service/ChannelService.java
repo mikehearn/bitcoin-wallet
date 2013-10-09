@@ -192,8 +192,7 @@ public class ChannelService extends Service {
 	// The calls made to this class (except for getService()) are run in an android thread pool, so should all be
 	// thread-safe.
 	public class LocalBinder extends IChannelRemoteService.Stub {
-		public ChannelService getService()
-		{
+		public ChannelService getService() {
 			// This may only be called by the local process
 			return ChannelService.this;
 		}
@@ -358,6 +357,9 @@ public class ChannelService extends Service {
 				metadata.client.receiveMessage(Protos.TwoWayChannelMessage.parseFrom(protobuf));
 			} catch (InvalidProtocolBufferException e) {
 				log.error("Got an invalid protobuf from client", e);
+            } catch (ValueOutOfRangeException e) {
+                // TODO: This shouldn't happen, but plumb it through anyway.
+                log.error("Got value out of range during initiate", e);
 			} finally {
 				lock.unlock();
 			}
