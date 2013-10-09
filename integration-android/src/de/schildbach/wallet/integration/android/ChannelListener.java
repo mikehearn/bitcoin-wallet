@@ -63,7 +63,7 @@ public interface ChannelListener {
 
         public static CloseReason from(int reason) {
             for (CloseReason r : values()) {
-                if (r.ordinal() == reason) return r;
+                if (r.code == reason) return r;
             }
             return UNKNOWN;
         }
