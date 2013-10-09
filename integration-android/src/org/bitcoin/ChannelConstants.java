@@ -17,8 +17,8 @@
 package org.bitcoin;
 
 public class ChannelConstants {
-	public static int RESULT_OK = -1;
-	public static int NO_SUCH_CHANNEL = -2;
-	public static int CHANNEL_NOT_IN_SPENDABLE_STATE = -3;
-	public static int INVALID_REQUEST = -4;
+	public static int NO_SUCH_CHANNEL = -1;
+	public static int CHANNEL_NOT_IN_SPENDABLE_STATE = -2;
+	public static int INVALID_REQUEST = -3;
+    public static int INSUFFICIENT_VALUE = -4;
 }

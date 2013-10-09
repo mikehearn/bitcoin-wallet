@@ -29,13 +29,14 @@ import android.util.Log;
 import android.widget.Toast;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
-import org.bitcoin.ChannelConstants;
 import org.bitcoin.IChannelCallback;
 import org.bitcoin.IChannelRemoteService;
 
 import java.util.Arrays;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * <p>This class manages a connection with a wallet client and a payment channel on top.</p>
@@ -385,39 +386,19 @@ public final class BitcoinPaymentChannelManager
 		try {
 			long returnValue = remoteService.payServer(channelCookie, amount);
 
-			if (returnValue > ChannelConstants.RESULT_OK) {
-				// If amount is too small to pay, just give up and dont pay anything
-				if (amount <= returnValue) {
-					Log.e(TAG, "Payment channel service failed to pay because amount was to small (ie cost too much in fees)");
-					return 0;
-				}
+            if (returnValue > 0) {
+                if (returnValue != amount) {
+                    // This can be due to a mismatch between what we want to do and what Bitcoin can actually let us
+                    // do, for example, if the resulting amount of money left on the channel after the requested amount
+                    // would have been less than the minimum "dust" output size, then the wallet will just round up
+                    // and empty the channel as there's nothing else we can do at that point.
+                    Log.i(TAG, "Tried to spend " + amount + " but actually spent " + returnValue);
+                }
+                return returnValue;
+            }
 
-				try {
-					Log.e(TAG, "Not enough value left in channel for sendMoney call - spending the rest and closing channel");
-					// Try to send the remaining value left in the channel...
-					long returnValue2 = remoteService.payServer(channelCookie, returnValue);
-					// ...and open a new channel to pay the rest
-					disconnectFromWallet(true);
-					if (returnValue2 == ChannelConstants.RESULT_OK) {
-						Log.i(TAG, "Successfully spent the remaining value in channel - " + returnValue);
-						return returnValue;
-					} else {
-						Log.e(TAG, "Error spending the remaining value in the channel - service returned " + returnValue);
-						return 0;
-					}
-				} catch (RemoteException e) {
-					Log.e(TAG, "RemoteException while spending remaining channel value, closing channel and connection", e);
-					// Server seems busted
-					disconnectFromWallet(true);
-					return 0;
-				}
-			}
-
-			if (returnValue == ChannelConstants.RESULT_OK) {
-				Log.d(TAG, "Successfully sent money on channel");
-				return amount;
-			} else
-				Log.e(TAG, "Error sending money on channel, service returned " + returnValue);
+            Log.e(TAG, "Error sending money on channel, service returned " + returnValue);
+            throw new IllegalArgumentException("Error " + returnValue);
 		} catch (RemoteException e) {
 			// Service connection died
 			Log.e(TAG, "RemoteException while sending money on channel", e);
@@ -428,23 +409,18 @@ public final class BitcoinPaymentChannelManager
 	}
 
 	/**
-	 * <p>Attempts to send the given amount to the server. If there is not enough value left in the channel, the
-	 * remaining value will be sent and the application is expected to open a new channel if it wishes to send the rest
-	 * (a {@link ChannelListener#channelClosedOrNotOpened(int)} callback will be generated before the future returns).</p>
-	 *
-	 * <p>If the channel is not currently open, no value is sent and reconnection will be attempted. In this case, the
-	 * caller is expected to time the channel out after some reasonable period, just as for initial channel creation</p>
+	 * <p>Attempts to send the given amount to the server. Returns the amount actually sent or zero if the wallet app
+     * wasn't ready (try again later). The Future may have an IllegalArgumentException attached to it, if the wallet
+     * returned an error code (for instance if there was not enough value left in the channel to make this payment).
 	 *
 	 * @return The amount actually sent
 	 */
-	public ListenableFuture<Long> sendMoney(final long amount) {
-		final SettableFuture<Long> future = SettableFuture.create();
-		executorService.submit(new Runnable() {
-			public void run() {
-				future.set(doSendMoney(amount));
-			}
-		});
-		return future;
+	public Future<Long> sendMoney(final long amount) {
+		return executorService.submit(new Callable<Long>() {
+            public Long call() {
+                return doSendMoney(amount);
+            }
+        });
 	}
 
 	/**

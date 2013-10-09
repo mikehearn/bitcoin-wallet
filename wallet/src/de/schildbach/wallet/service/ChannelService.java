@@ -285,7 +285,7 @@ public class ChannelService extends Service {
 			try {
 				ChannelAndMetadata channel = cookieToChannelMap.get(id);
 				if (channel == null || channel.client == null) {
-					log.error( "App requested payment increase for an unknown channel");
+					log.error("App requested payment increase for an unknown channel");
 					return ChannelConstants.NO_SUCH_CHANNEL;
 				}
 
@@ -296,18 +296,24 @@ public class ChannelService extends Service {
 
 				long valueRemaining = getAppValueRemaining(channel.appId);
 				if (valueRemaining < amount) {
-					log.error("App requested a payment increase larger than the remaining user-allowed value");
-					return valueRemaining;
+					log.error("App requested {} but remaining user-allowed value is {}", valueRemaining);
+                    return ChannelConstants.INSUFFICIENT_VALUE;
 				}
 
 				try {
-					channel.client.incrementPayment(BigInteger.valueOf(amount));
-					incrementAndGet(channel.appId, -amount);
-					log.info("Successfully incremented channel payment for app " + channel.appId);
-					return ChannelConstants.RESULT_OK;
+                    long actualAmount = channel.client.incrementPayment(BigInteger.valueOf(amount)).longValue();
+                    // Subtract the amount spent from the apps quota. Note that it may be a different amount
+                    // to what was requested, e.g. it might be higher if the remaining amount on the channel
+                    // would have been unsettleable.
+					incrementAndGet(channel.appId, -actualAmount);
+					log.info("Successfully made payment for app {} of {} satoshis", channel.appId, actualAmount);
+                    if (actualAmount != amount)
+                        log.info("  vs {} satoshis which was requested", amount);
+					return actualAmount;
 				} catch (ValueOutOfRangeException e) {
+                    // The user may have allowed us more than was actually put into the channel.
 					log.error("Attempt to increment payment got ValueOutOfRangeException for app " + channel.appId, e);
-					return channel.client.state().getValueRefunded().longValue();
+					return ChannelConstants.INSUFFICIENT_VALUE;
 				} catch (IllegalStateException e) {
 					log.error("Attempt to increment payment got IllegalStateException for app " + channel.appId, e);
 					closeConnection(id);

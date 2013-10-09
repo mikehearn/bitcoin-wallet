@@ -51,11 +51,11 @@ interface IChannelRemoteService {
     void messageReceived(String cookie, in byte[] protobuf);
 
     /**
-     * Pays the server the given amount.
+     * Attempts to pay the server the given amount. The actual amount paid may be less (if the channel ran out of value)
+     * or more (if the remaining amount on the channel would have been unsettleable).
      *
-     * @return A constant from {@link org.bitcoin.ChannelConstants} or the value remaining in this channel if the send
-     *         failed because the value was either too small (and ran afoul of fee rules) or was larger than the value
-     *         remaining in this channel.
+     * @return A constant from {@link org.bitcoin.ChannelConstants} in an error case, or the amount of value actually
+     *         spent, which may differ from the requested amount in some situations.
      */
     long payServer(String cookie, long amount);
 

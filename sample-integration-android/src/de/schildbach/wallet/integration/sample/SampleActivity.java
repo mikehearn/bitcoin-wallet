@@ -20,6 +20,7 @@ package de.schildbach.wallet.integration.sample;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
@@ -31,8 +32,6 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
-import com.google.common.util.concurrent.FutureCallback;
-import com.google.common.util.concurrent.Futures;
 import de.schildbach.wallet.integration.android.AbstractTCPPaymentChannel;
 import de.schildbach.wallet.integration.android.BitcoinIntegration;
 import de.schildbach.wallet.integration.android.BitcoinPaymentChannelManager;
@@ -40,6 +39,7 @@ import de.schildbach.wallet.integration.android.ChannelListener;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.concurrent.ExecutionException;
 
 /**
  * @author Andreas Schildbach
@@ -109,36 +109,13 @@ public class SampleActivity extends Activity
 
         sharedPreferences = getPreferences(MODE_PRIVATE);
 		payChannelButton.setOnClickListener(new OnClickListener() {
-			// Pay at least this to avoid the case where not enough value is sent to actually
-			// close the channel. That can happen if the final contract transaction would have to pay more in fees
-            // than it's actually worth.
-			final long amount = 30000;
 			public void onClick(View v) {
-				Futures.addCallback(channel.sendMoney(amount), new FutureCallback<Long>() {
-					public void onSuccess(final Long nanoCoinsSent) {
-                        SampleActivity.this.runOnUiThread(new Runnable() {
-        						// A real app should queue the remaining value and resend it later
-								public void run() {
-                                    if (nanoCoinsSent != amount) {
-                                        payChannelButton.setEnabled(false);
-    									Toast.makeText(SampleActivity.this, "Channel only sent " + nanoCoinsSent + ", we probably ran out of money", Toast.LENGTH_LONG).show();
-                                    }
-                                    recordSpending(nanoCoinsSent);
-								}
-                        });
-					}
-
-					public void onFailure(final Throwable t) {
-						SampleActivity.this.runOnUiThread(new Runnable() {
-							public void run() {
-								payChannelButton.setEnabled(false);
-								Toast.makeText(SampleActivity.this, "Attempt to send threw " + t, Toast.LENGTH_LONG).show();
-							}
-						});
-					}
-				});
+                // Pay at least this to avoid the case where not enough value is sent to actually
+                // close the channel. That can happen if the final contract transaction would have to pay more in fees
+                // than it's actually worth.
+                makePayment(30000);
 			}
-		});
+        });
 		payChannelButton.setEnabled(false);
 
 		closeChannelButton.setOnClickListener(new OnClickListener() {
@@ -149,6 +126,35 @@ public class SampleActivity extends Activity
 		});
 		closeChannelButton.setEnabled(false);
 	}
+
+    private void makePayment(final long amount) {
+        AsyncTask<Void, Void, Long> task = new AsyncTask<Void, Void, Long>() {
+            private Throwable error = null;
+
+            @Override
+            protected Long doInBackground(Void... voids) {
+                try {
+                    return channel.sendMoney(amount).get();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                } catch (ExecutionException e) {
+                    error = e;
+                    return (long) -1;
+                }
+            }
+
+            @Override
+            protected void onPostExecute(Long actualAmountSent) {
+                if (error != null) {
+                    Toast.makeText(SampleActivity.this, "Got error when sending: " + error, Toast.LENGTH_LONG);
+                } else if (actualAmountSent != amount) {
+                    Toast.makeText(SampleActivity.this,
+                            "Wanted to send " + amount + " but actually sent " + actualAmountSent, Toast.LENGTH_LONG);
+                }
+            }
+        };
+        task.execute();
+    }
 
     private void attemptChannelOpen() {
         final String host = hostText.getText().toString();
