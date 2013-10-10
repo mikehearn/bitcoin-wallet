@@ -142,6 +142,11 @@ public class SampleActivity extends Activity
 	}
 
     private void makePayment(final long amount) {
+        if (channel == null) {
+            Log.i(TAG, "No active channel - reconnecting");
+            attemptChannelOpen();
+            return;
+        }
         AsyncTask<Void, Void, Long> task = new AsyncTask<Void, Void, Long>() {
             private Throwable error = null;
 
@@ -161,8 +166,7 @@ public class SampleActivity extends Activity
             protected void onPostExecute(Long actualAmountSent) {
                 recordSpending(actualAmountSent);
                 if (getSpentSoFar() >= MIN_AUTH_REQ - PAYMENT_SIZE) {
-                    // The amount of money we have left on the channel is less than the size of the payment made by
-                    // pressing the button, so just go ahead and close at this point.
+                    Log.i(TAG, "Amount left on channel is smaller than amount sent by pressing the button, closing");
                     channel.closeChannel();
                     channel = null;
                 }
@@ -194,14 +198,25 @@ public class SampleActivity extends Activity
 
         long valueToRequest = MIN_AUTH_REQ - spentSoFar;
         if (valueToRequest <= 0) {
-            // Time to ask the user for more dough ...
+            // Time to ask the user for more dough ... when the user comes back to us in onActivityResult we will
+            // reset the pref that is tracking how much money we spent (because we got given some more).
             valueToRequest = MIN_AUTH_REQ;
         }
+
+        // Edge case: after doing a bunch of spends and closing a channel, we might end up with an amount that is too
+        // small for the server to accept. The server is allowed to refuse to create a channel with us if the channel
+        // size isn't big enough according to its own preferences. If that happens, we'll surface in
+        // channelClosedOrNotOpened(reason) below with reason == SERVER_REQUESTED_TOO_MUCH_VALUE. At that point, we'll
+        // go back to the user and ask for more quota, even though we haven't actually run out yet.
+        //
+        // If the amount of quota we're asking for (MIN_AUTH_REQ) is lower than what the server wants, we may never
+        // be able to set up a channel. In a real app you'd figure out the details of this as part of your own
+        // protocol or use case so this kind of confusion is avoided at a higher level.
 
         // We may have to call prepare multiple times, if the user has to step through some UI flows.
         BitcoinPaymentChannelManager.prepare(this, valueToRequest, true, testNet, CHANNEL_REQUEST_CODE, new BitcoinPaymentChannelManager.PrepareCallback() {
             public void success() {
-                // We got authorized! Use the helper library to set up a simple TCP messaging socket.
+                // We are authorized! Use the helper library to set up a simple TCP messaging socket.
                 startupPaymentChannel(host);
             }
 
@@ -222,22 +237,20 @@ public class SampleActivity extends Activity
     }
 
     private void startupPaymentChannel(String host) {
+        // Provide custom handling for events that can happen - mostly, toasting the user and twiddling the buttons.
         AbstractTCPPaymentChannel channelListener = new AbstractTCPPaymentChannel(new InetSocketAddress(host, 4242), 15 * 1000) {
             boolean wasOpened = false;
 
             public void channelOpen(final byte[] contractHash) {
-                if (contractHash.length != 32) {
-                    // A real app should securely contact the server and verify contractHash here
-                    channel.closeChannel();
-                    return;
-                }
+                // A real app should securely contact the server and verify contractHash here
                 wasOpened = true;
+                Log.i(TAG, "Channel opened");
                 SampleActivity.this.runOnUiThread(new Runnable() {
                     public void run() {
                         payChannelButton.setEnabled(true);
                         closeChannelButton.setEnabled(true);
                         hostText.setEnabled(false);
-                        Toast.makeText(SampleActivity.this, "Channel opened " + hexEncodeHash(contractHash), Toast.LENGTH_SHORT).show();
+                        showMessage("Channel opened " + hexEncodeHash(contractHash));
                     }
                 });
             }
@@ -245,9 +258,11 @@ public class SampleActivity extends Activity
             @Override
             public void channelInterrupted() {
                 super.channelInterrupted();
+                Log.i(TAG, "Channel interrupted");
                 SampleActivity.this.runOnUiThread(new Runnable() {
                     public void run() {
-                        Toast.makeText(SampleActivity.this, "Channel interrupted, will reconnect on pay", Toast.LENGTH_LONG).show();
+                        showMessage("Channel interrupted, will reconnect on pay");
+                        updateUiForClose();
                     }
                 });
             }
@@ -256,16 +271,25 @@ public class SampleActivity extends Activity
             public void channelClosedOrNotOpened(final CloseReason reason) {
                 super.channelClosedOrNotOpened(reason);
                 channel = null;
+                Log.i(TAG, "Channel closed or not opened: " + reason);
+
                 SampleActivity.this.runOnUiThread(new Runnable() {
                     public void run() {
-                        payChannelButton.setEnabled(false);
-                        closeChannelButton.setEnabled(false);
-                        openChannelButton.setEnabled(true);
-                        hostText.setEnabled(true);
+                        if (reason == CloseReason.SERVER_REQUESTED_TOO_MUCH_VALUE) {
+                            // See the big comment about edge case above in attemptChannelOpen. Ask the user for more
+                            // quota if this happens so we can get over the servers minimum value (even though we do
+                            // have a bit of quota left).
+                            resetSpending();
+                            attemptChannelOpen();
+                            showMessage("Server requires more value than the app has remaining quota: reauth time!");
+                            return;
+                        }
+
+                        updateUiForClose();
                         if (wasOpened)
-                            Toast.makeText(SampleActivity.this, "Channel closed: " + reason, Toast.LENGTH_LONG).show();
+                            showMessage("Channel closed: " + reason);
                         else
-                            Toast.makeText(SampleActivity.this, "Channel failed to open: " + reason, Toast.LENGTH_LONG).show();
+                            showMessage("Channel failed to open: " + reason);
                     }
                 });
                 // A real app may wish to retry opening a new channel here
@@ -287,7 +311,7 @@ public class SampleActivity extends Activity
                     closeChannelButton.setEnabled(false);
                     openChannelButton.setEnabled(true);
                     hostText.setEnabled(true);
-                    Toast.makeText(SampleActivity.this, "Failed to connect to server with exception " + e, Toast.LENGTH_LONG).show();
+                    showMessage("Failed to connect to server with exception " + e);
                     Log.e(TAG, "Failed to connect to server", e);
                 }
             });
@@ -300,11 +324,22 @@ public class SampleActivity extends Activity
         channel.connect();
     }
 
+    private void updateUiForClose() {
+        payChannelButton.setEnabled(false);
+        closeChannelButton.setEnabled(false);
+        openChannelButton.setEnabled(true);
+        hostText.setEnabled(true);
+    }
+
     @Override
     protected void onStop() {
         super.onStop();
         if (channel != null)
             channel.disconnectFromWallet(false);
+    }
+
+    private void showMessage(String msg) {
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
     }
 
     @Override

@@ -35,6 +35,7 @@ import com.google.bitcoin.protocols.channels.ValueOutOfRangeException;
 import com.google.bitcoin.utils.Threading;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.google.protobuf.TextFormat;
 import de.schildbach.wallet.WalletApplication;
 import de.schildbach.wallet.ui.ChannelRequestActivity;
 import de.schildbach.wallet.util.WalletUtils;
@@ -122,56 +123,60 @@ public class ChannelService extends Service {
 		// TODO: Using a constant key for everything is very broken in many sense, at a minimum a large keypool can be
 		// created once that is used forever, but, realistically, an HD wallet should be used.
 		ECKey key = WalletUtils.pickOldestKey(walletApplication.getWallet());
-        metadata.client = new PaymentChannelClient(walletApplication.getWallet(), key, BigInteger.valueOf(maxValue),
-                Sha256Hash.create(metadata.hostId.getBytes()), new PaymentChannelClient.ClientConnection() {
-            @Override
-            public void sendToServer(Protos.TwoWayChannelMessage msg) {
-                try {
-                    metadata.listener.sendProtobuf(msg.toByteArray());
-                } catch (RemoteException e) {
-                    closeConnection(cookie, false);
-                }
-            }
+		metadata.client = new PaymentChannelClient(walletApplication.getWallet(), key, BigInteger.valueOf(maxValue),
+				Sha256Hash.create(metadata.hostId.getBytes()), new PaymentChannelClient.ClientConnection() {
+			@Override
+			public void sendToServer(Protos.TwoWayChannelMessage msg) {
+				try {
+					metadata.listener.sendProtobuf(msg.toByteArray());
+				} catch (RemoteException e) {
+					closeConnection(cookie, false);
+				}
+			}
 
-            @Override
-            public void destroyConnection(PaymentChannelCloseException.CloseReason reason) {
-                try {
-                    metadata.listener.closeConnection(reason.ordinal());
-                } catch (RemoteException e) {
-                    closeConnection(cookie, false);
-                }
-            }
+			@Override
+			public void destroyConnection(PaymentChannelCloseException.CloseReason reason) {
+				try {
+					log.info("Telling remote app to close connection: {}", reason);
+					metadata.listener.closeConnection(reason.ordinal());
+				} catch (RemoteException ignored) {}
+				closeConnection(cookie, false);
+			}
 
-            @Override
-            public void channelOpen() {
-                log.info("Successfully opened payment channel");
-                walletApplication.getContractHashToCreatorMap().setCreatorApp(metadata.client.state().getMultisigContract().getHash(),
-                        metadata.appName);
-                try {
-                    metadata.listener.channelOpen(metadata.client.state().getMultisigContract().getHash().getBytes());
-                } catch (RemoteException e) {
-                    closeConnection(cookie, false);
-                }
-            }
-        });
-        metadata.client.connectionOpen();
+			@Override
+			public void channelOpen() {
+				log.info("Successfully opened payment channel");
+				walletApplication.getContractHashToCreatorMap().setCreatorApp(metadata.client.state().getMultisigContract().getHash(),
+						metadata.appName);
+				try {
+					metadata.listener.channelOpen(metadata.client.state().getMultisigContract().getHash().getBytes());
+				} catch (RemoteException e) {
+					closeConnection(cookie, false);
+				}
+			}
+		});
+		metadata.client.connectionOpen();
 	}
 
 	// Closes the given connection and removes it from the pool
 	@GuardedBy("lock")
 	private void closeConnection(String id, boolean generateServerClose) {
-		checkState(lock.isHeldByCurrentThread());
-
-		ChannelAndMetadata channel = cookieToChannelMap.remove(id);
-		if (channel == null || channel.client == null)
-			return;
 		try {
-			if (generateServerClose)
+			checkState(lock.isHeldByCurrentThread());
+			ChannelAndMetadata channel = checkNotNull(cookieToChannelMap.get(id));
+			if (generateServerClose) {
 				channel.client.close();
+				// We just sent a CLOSE message to the server. When it responds to us with the final contract,
+				// the PaymentChannelClient will call destroyConnection() above, which will reinvoke this method
+				// with generateServerClose == false, meaning we will then tell the client it's OK to tear down
+				// the connection.
+				return;
+			}
+			cookieToChannelMap.remove(id);
+			channel.client.connectionClosed();
 		} catch (IllegalStateException e) {
 			// Already closed...oh well
 		}
-		channel.client.connectionClosed();
 	}
 
 	/**
@@ -237,13 +242,13 @@ public class ChannelService extends Service {
 			}
 			if (appName == null) appName = appId;
 
-            final ChannelAndMetadata channel = new ChannelAndMetadata(listener, hostId);
-            channel.appId = appId;
-            channel.appName = appName;
+			final ChannelAndMetadata channel = new ChannelAndMetadata(listener, hostId);
+			channel.appId = appId;
+			channel.appName = appName;
 
-            watchForDeath(listener, channel);
+			watchForDeath(listener, channel);
 
-            lock.lock();
+			lock.lock();
 			try {
 				long valueRemaining = getAppValueRemaining(appId);
 				String cookie = UUID.randomUUID().toString();
@@ -256,27 +261,27 @@ public class ChannelService extends Service {
 			}
 		}
 
-        private void watchForDeath(IChannelCallback listener, final ChannelAndMetadata channel) {
-            // We need to find out if the connected app goes away so we can mark the channel as inactive.
-            // Arguably, the payment channels framework should not attempt to prevent concurrent use of
-            // channels by apps because mutual exclusion is better done at higher levels, but it does and
-            // revisiting that decision must come in a later version.
-            try {
-                listener.asBinder().linkToDeath(new DeathRecipient() {
-                    @Override
-                    public void binderDied() {
-                        log.info("Connected app '{}' died, marking channel {} as inactive", channel.appName, channel.hostId);
-                        channel.client.connectionClosed();
-                    }
-                }, 0);
-            } catch (RemoteException e) {
-                // Race: calling process died whilst we're in the middle of processing its RPC :( Doesn't make sense
-                // to proceed at this point.
-                throw new RuntimeException(e);
-            }
-        }
+		private void watchForDeath(IChannelCallback listener, final ChannelAndMetadata channel) {
+			// We need to find out if the connected app goes away so we can mark the channel as inactive.
+			// Arguably, the payment channels framework should not attempt to prevent concurrent use of
+			// channels by apps because mutual exclusion is better done at higher levels, but it does and
+			// revisiting that decision must come in a later version.
+			try {
+				listener.asBinder().linkToDeath(new DeathRecipient() {
+					@Override
+					public void binderDied() {
+						log.info("Connected app '{}' died, marking channel {} as inactive", channel.appName, channel.hostId);
+						channel.client.connectionClosed();
+					}
+				}, 0);
+			} catch (RemoteException e) {
+				// Race: calling process died whilst we're in the middle of processing its RPC :( Doesn't make sense
+				// to proceed at this point.
+				throw new RuntimeException(e);
+			}
+		}
 
-        @Override
+		@Override
 		public long payServer(String id, long amount) {
 			if (id == null || amount < 0)
 				return ChannelConstants.INVALID_REQUEST;
@@ -297,21 +302,21 @@ public class ChannelService extends Service {
 				long valueRemaining = getAppValueRemaining(channel.appId);
 				if (valueRemaining < amount) {
 					log.error("App requested {} but remaining user-allowed value is {}", amount, valueRemaining);
-                    return ChannelConstants.INSUFFICIENT_VALUE;
+					return ChannelConstants.INSUFFICIENT_VALUE;
 				}
 
 				try {
-                    long actualAmount = channel.client.incrementPayment(BigInteger.valueOf(amount)).longValue();
-                    // Subtract the amount spent from the apps quota. Note that it may be a different amount
-                    // to what was requested, e.g. it might be higher if the remaining amount on the channel
-                    // would have been unsettleable.
+					long actualAmount = channel.client.incrementPayment(BigInteger.valueOf(amount)).longValue();
+					// Subtract the amount spent from the apps quota. Note that it may be a different amount
+					// to what was requested, e.g. it might be higher if the remaining amount on the channel
+					// would have been unsettleable.
 					incrementAndGet(channel.appId, -actualAmount);
 					log.info("Successfully made payment for app {} of {} satoshis", channel.appId, actualAmount);
-                    if (actualAmount != amount)
-                        log.info("  vs {} satoshis which was requested", amount);
+					if (actualAmount != amount)
+						log.info("  vs {} satoshis which was requested", amount);
 					return actualAmount;
 				} catch (ValueOutOfRangeException e) {
-                    // The user may have allowed us more than was actually put into the channel.
+					// The user may have allowed us more than was actually put into the channel.
 					log.error("Attempt to increment payment got ValueOutOfRangeException for app " + channel.appId, e);
 					return ChannelConstants.INSUFFICIENT_VALUE;
 				} catch (IllegalStateException e) {
@@ -351,21 +356,26 @@ public class ChannelService extends Service {
 			}
 		}
 
-        public void messageReceived(String cookie, byte[] protobuf) {
+		public void messageReceived(String cookie, byte[] protobuf) {
 			if (cookie == null)
 				return;
-			log.info("App provided message from server");
 			lock.lock();
 			try {
+				final Protos.TwoWayChannelMessage msg = Protos.TwoWayChannelMessage.parseFrom(protobuf);
+				log.info("App provided message from server");
+				if (log.isDebugEnabled())
+					log.debug(TextFormat.printToString(msg));
 				ChannelAndMetadata metadata = cookieToChannelMap.get(cookie);
-				if (metadata == null || metadata.client == null)
+				if (metadata == null || metadata.client == null) {
+					log.error("... but the given channel cookie wasn't found");
 					return;
-				metadata.client.receiveMessage(Protos.TwoWayChannelMessage.parseFrom(protobuf));
+				}
+				metadata.client.receiveMessage(msg);
 			} catch (InvalidProtocolBufferException e) {
 				log.error("Got an invalid protobuf from client", e);
-            } catch (ValueOutOfRangeException e) {
-                // TODO: This shouldn't happen, but plumb it through anyway.
-                log.error("Got value out of range during initiate", e);
+			} catch (ValueOutOfRangeException e) {
+				// TODO: This shouldn't happen, but plumb it through anyway.
+				log.error("Got value out of range during initiate", e);
 			} finally {
 				lock.unlock();
 			}

@@ -73,6 +73,7 @@ public final class BitcoinPaymentChannelManager
 		CHANNEL_OPENING,
 		CHANNEL_OPEN,
 		CHANNEL_INTERRUPTED,
+		CHANNEL_CLOSING,
 		CHANNEL_CLOSED
 	}
 	private ChannelState state;
@@ -134,7 +135,7 @@ public final class BitcoinPaymentChannelManager
 				if (runChannelClosed)
 					executorService.submit(new Runnable() {
 						public void run() {
-                            clientListener.channelClosedOrNotOpened(ChannelListener.CloseReason.NO_WALLET_APP);
+							clientListener.channelClosedOrNotOpened(ChannelListener.CloseReason.NO_WALLET_APP);
 						}
 					});
 			} else {
@@ -174,23 +175,24 @@ public final class BitcoinPaymentChannelManager
 	 */
 	public synchronized void disconnectFromWallet(boolean closeChannel) {
 		if (closeChannel) {
-            boolean runChannelClosed = state != ChannelState.CHANNEL_CLOSED;
-            state = ChannelState.CHANNEL_CLOSED;
-			Log.d(TAG, "Attempting to close channel and associated service binding");
 			try {
+				state = ChannelState.CHANNEL_CLOSING;
+				Log.d(TAG, "Attempting to close channel and associated service binding");
 				if (remoteService != null)
 					remoteService.closeConnection(channelCookie);
+				// The wallet will now ask the server to close/settle the payment channel, and when it's done so and
+				// given us back the final contract, the wallet will call back to us telling us the channel is closed
+				// as normal, we'll unbind at that point.
+				return;
 			} catch (RemoteException e) {
 				// In this case it is not worth trying to reconnect just to close the channel, we leave it to the wallet
 				// to figure it out.
 			}
-			if (runChannelClosed)
-				executorService.submit(new Runnable() {
-					public void run() {
-                        clientListener.channelClosedOrNotOpened(ChannelListener.CloseReason.CLIENT_REQUESTED_CLOSE);
-					}
-				});
 		} else {
+			if (state == ChannelState.CHANNEL_CLOSING) {
+				Log.d(TAG, "disconnectFromWallet: channel already closing, wallet will disconnect from us instead");
+				return;
+			}
 			Log.d(TAG, "Closing service binding for payment channel");
 			try {
 				if (remoteService != null)
@@ -358,18 +360,18 @@ public final class BitcoinPaymentChannelManager
 				doUnbind();
 				boolean runChannelClosed;
 				synchronized (BitcoinPaymentChannelManager.this) {
-					runChannelClosed = state != ChannelState.CHANNEL_CLOSED;
+					runChannelClosed = state == ChannelState.CHANNEL_CLOSING;
 					state = ChannelState.CHANNEL_CLOSED;
 				}
 				// Use the executor service to ensure callbacks are processed in order
 				if (runChannelClosed) {
-                    final ChannelListener.CloseReason r = ChannelListener.CloseReason.from(reason);
+					final ChannelListener.CloseReason r = ChannelListener.CloseReason.from(reason);
 					executorService.submit(new Runnable() {
 						public void run() {
 							clientListener.channelClosedOrNotOpened(r);
 						}
 					});
-                }
+				}
 			}
 		};
 
@@ -386,19 +388,19 @@ public final class BitcoinPaymentChannelManager
 		try {
 			long returnValue = remoteService.payServer(channelCookie, amount);
 
-            if (returnValue > 0) {
-                if (returnValue != amount) {
-                    // This can be due to a mismatch between what we want to do and what Bitcoin can actually let us
-                    // do, for example, if the resulting amount of money left on the channel after the requested amount
-                    // would have been less than the minimum "dust" output size, then the wallet will just round up
-                    // and empty the channel as there's nothing else we can do at that point.
-                    Log.i(TAG, "Tried to spend " + amount + " but actually spent " + returnValue);
-                }
-                return returnValue;
-            }
+			if (returnValue > 0) {
+				if (returnValue != amount) {
+					// This can be due to a mismatch between what we want to do and what Bitcoin can actually let us
+					// do, for example, if the resulting amount of money left on the channel after the requested amount
+					// would have been less than the minimum "dust" output size, then the wallet will just round up
+					// and empty the channel as there's nothing else we can do at that point.
+					Log.i(TAG, "Tried to spend " + amount + " but actually spent " + returnValue);
+				}
+				return returnValue;
+			}
 
-            Log.e(TAG, "Error sending money on channel, service returned " + returnValue);
-            throw new IllegalArgumentException("Error " + returnValue);
+			Log.e(TAG, "Error sending money on channel, service returned " + returnValue);
+			throw new IllegalArgumentException("Error " + returnValue);
 		} catch (RemoteException e) {
 			// Service connection died
 			Log.e(TAG, "RemoteException while sending money on channel", e);
@@ -410,17 +412,17 @@ public final class BitcoinPaymentChannelManager
 
 	/**
 	 * <p>Attempts to send the given amount to the server. Returns the amount actually sent or zero if the wallet app
-     * wasn't ready (try again later). The Future may have an IllegalArgumentException attached to it, if the wallet
-     * returned an error code (for instance if there was not enough value left in the channel to make this payment).
+	 * wasn't ready (try again later). The Future may have an IllegalArgumentException attached to it, if the wallet
+	 * returned an error code (for instance if there was not enough value left in the channel to make this payment).
 	 *
 	 * @return The amount actually sent
 	 */
 	public Future<Long> sendMoney(final long amount) {
 		return executorService.submit(new Callable<Long>() {
-            public Long call() throws Exception {
-                return doSendMoney(amount);
-            }
-        });
+			public Long call() throws Exception {
+				return doSendMoney(amount);
+			}
+		});
 	}
 
 	/**
@@ -456,11 +458,13 @@ public final class BitcoinPaymentChannelManager
 	 * @return A future which completes with true if the message was passed to the wallet, or false if the call should
 	 *         be retried on channelOpen.
 	 */
-	public ListenableFuture<Boolean> messageReceived(final byte[] protobuf) {
+	public synchronized ListenableFuture<Boolean> messageReceived(final byte[] protobuf) {
+		final ChannelState curState = state;
 		final SettableFuture<Boolean> future = SettableFuture.create();
 		executorService.submit(new Runnable() {
 			public void run() {
-				if (!getConnected(true)) {
+				// When we're in the process of closing, we expect to receive a message from the server.
+				if (curState != ChannelState.CHANNEL_CLOSING && !getConnected(true)) {
 					Log.i(TAG, "messageReceived called while not connected, connecting");
 					future.set(false);
 					return;
