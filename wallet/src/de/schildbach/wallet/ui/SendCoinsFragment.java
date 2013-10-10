@@ -510,6 +510,8 @@ public final class SendCoinsFragment extends SherlockFragment
 
 		contentResolver.unregisterContentObserver(contentObserver);
 
+        dismissPopup();
+
 		super.onPause();
 	}
 
