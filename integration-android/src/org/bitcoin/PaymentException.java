@@ -16,9 +16,20 @@
 
 package org.bitcoin;
 
-public class ChannelConstants {
-	public static int NO_SUCH_CHANNEL = -1;
-	public static int CHANNEL_NOT_IN_SPENDABLE_STATE = -2;
-	public static int INVALID_REQUEST = -3;
-    public static int INSUFFICIENT_VALUE = -4;
+public class PaymentException extends Exception {
+    // TODO: enumify this.
+	public static final int NO_SUCH_CHANNEL = -1;
+	public static final int CHANNEL_NOT_IN_SPENDABLE_STATE = -2;
+	public static final int INVALID_REQUEST = -3;
+    public static final int INSUFFICIENT_VALUE = -4;
+
+    private int code;
+
+    public PaymentException(int code) {
+        this.code = code;
+    }
+
+    public int getCode() {
+        return code;
+    }
 }

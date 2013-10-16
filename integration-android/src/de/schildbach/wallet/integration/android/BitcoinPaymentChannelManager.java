@@ -31,6 +31,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import org.bitcoin.IChannelCallback;
 import org.bitcoin.IChannelRemoteService;
+import org.bitcoin.PaymentException;
 
 import java.util.Arrays;
 import java.util.concurrent.Callable;
@@ -378,7 +379,7 @@ public final class BitcoinPaymentChannelManager
 		this.context = context;
 	}
 
-	private synchronized long doSendMoney(long amount) {
+	private synchronized long doSendMoney(long amount) throws PaymentException {
 		if (!getConnected(false)) {
 			Log.i(TAG, "sendMoney called while not connected, connecting");
 			return 0;
@@ -400,7 +401,7 @@ public final class BitcoinPaymentChannelManager
 			}
 
 			Log.e(TAG, "Error sending money on channel, service returned " + returnValue);
-			throw new IllegalArgumentException("Error " + returnValue);
+			throw new PaymentException((int)returnValue);
 		} catch (RemoteException e) {
 			// Service connection died
 			Log.e(TAG, "RemoteException while sending money on channel", e);

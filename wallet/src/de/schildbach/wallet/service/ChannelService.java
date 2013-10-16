@@ -40,7 +40,7 @@ import de.schildbach.wallet.WalletApplication;
 import de.schildbach.wallet.ui.ChannelRequestActivity;
 import de.schildbach.wallet.util.WalletUtils;
 import net.jcip.annotations.GuardedBy;
-import org.bitcoin.ChannelConstants;
+import org.bitcoin.PaymentException;
 import org.bitcoin.IChannelCallback;
 import org.bitcoin.IChannelRemoteService;
 import org.bitcoin.paymentchannel.Protos;
@@ -284,25 +284,25 @@ public class ChannelService extends Service {
 		@Override
 		public long payServer(String id, long amount) {
 			if (id == null || amount < 0)
-				return ChannelConstants.INVALID_REQUEST;
+				return PaymentException.INVALID_REQUEST;
 
 			lock.lock();
 			try {
 				ChannelAndMetadata channel = cookieToChannelMap.get(id);
 				if (channel == null || channel.client == null) {
 					log.error("App requested payment increase for an unknown channel");
-					return ChannelConstants.NO_SUCH_CHANNEL;
+					return PaymentException.NO_SUCH_CHANNEL;
 				}
 
 				if (!getApplicationContext().getPackageManager().getNameForUid(Binder.getCallingUid()).equals(channel.appId)) {
 					log.error("App requested payment increase for a channel it didn't initiate");
-					return ChannelConstants.NO_SUCH_CHANNEL;
+					return PaymentException.NO_SUCH_CHANNEL;
 				}
 
 				long valueRemaining = getAppValueRemaining(channel.appId);
 				if (valueRemaining < amount) {
 					log.error("App requested {} but remaining user-allowed value is {}", amount, valueRemaining);
-					return ChannelConstants.INSUFFICIENT_VALUE;
+					return PaymentException.INSUFFICIENT_VALUE;
 				}
 
 				try {
@@ -318,11 +318,11 @@ public class ChannelService extends Service {
 				} catch (ValueOutOfRangeException e) {
 					// The user may have allowed us more than was actually put into the channel.
 					log.error("Attempt to increment payment got ValueOutOfRangeException for app " + channel.appId, e);
-					return ChannelConstants.INSUFFICIENT_VALUE;
+					return PaymentException.INSUFFICIENT_VALUE;
 				} catch (IllegalStateException e) {
 					log.error("Attempt to increment payment got IllegalStateException for app " + channel.appId, e);
 					closeConnection(id);
-					return ChannelConstants.CHANNEL_NOT_IN_SPENDABLE_STATE;
+					return PaymentException.CHANNEL_NOT_IN_SPENDABLE_STATE;
 				}
 			} finally {
 				lock.unlock();
