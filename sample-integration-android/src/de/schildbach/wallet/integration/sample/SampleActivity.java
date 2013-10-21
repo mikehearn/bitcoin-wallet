@@ -45,51 +45,12 @@ import java.util.concurrent.ExecutionException;
  */
 public class SampleActivity extends Activity
 {
-    private static final String TAG = SampleActivity.class.getName();
-
 	private static final boolean testNet = true;
 	private static final String DONATION_ADDRESS = testNet ? "mwEacn7pYszzxfgcNaVUzYvzL6ypRJzB6A" : "1PZmMahjbfsTy6DsaRyfStzoWTPppWwDnZ";
 	private static final int DONATION_REQUEST_CODE = 0;
-	private static final int CHANNEL_REQUEST_CODE = 1;
-
-	// Amounts in satoshis
-	public static final int COIN = 10000000;
-	public static final int CENT = COIN / 100;
-
-    // The minimum amount we're going to ask the user to authorize us for. In this case, 10 millibits. The server
-    // is allowed to have a minimum channel size it's willing to tolerate - if here we ask the user for less than
-    // what the server allows, the channel can fail to build entirely, so it's best if we're a bit pushy here and
-    // ask for more than we might really need. The user can of course choose to give us more on the permissions
-    // screen that will pop up.
-    //
-    // The ExamplePaymentChannelServer app in the bitcoinj distribution shows how to receive these micropayments,
-    // and it has a minimum required channel size of 1 millibit, so we're going to ask for 10x the min amount.
-    // This is NOT the minimum payment granularity - once the channel is established, we can make payments of a
-    // single satoshi if the server is willing, but because we must eventually settle on the block chain the total
-    // amount of value put into the channel must be at least the minimum allowed value for a transaction.
-    public static final long MIN_AUTH_REQ = CENT;
-    public static final int PAYMENT_SIZE = 30000;
-
 
     private Button donateButton;
 	private TextView donateMessage;
-	private BitcoinPaymentChannelManager channel = null;
-	private Button openChannelButton;
-	private Button payChannelButton;
-	private Button closeChannelButton;
-	private EditText hostText;
-    private SharedPreferences sharedPreferences;
-
-    static String hexEncodeHash(byte[] contractHash) {
-		StringBuilder buf = new StringBuilder(20);
-		for (int i = 0; i < 10; i++) {
-			String s = Integer.toString(0xFF & contractHash[i], 16);
-			if (s.length() < 2)
-				buf.append('0');
-			buf.append(s);
-		}
-		return buf.toString();
-	}
 
 	@Override
 	protected void onCreate(final Bundle savedInstanceState)
@@ -110,237 +71,13 @@ public class SampleActivity extends Activity
 
 		donateMessage = (TextView) findViewById(R.id.sample_donate_message);
 
-		hostText = (EditText) findViewById(R.id.channel_host_text);
-		openChannelButton = (Button) findViewById(R.id.open_channel_button);
-		payChannelButton = (Button) findViewById(R.id.pay_channel_button);
-		closeChannelButton = (Button) findViewById(R.id.close_channel_button);
-
-		openChannelButton.setOnClickListener(new OnClickListener() {
-			public void onClick(final View v) {
-				attemptChannelOpen();
-			}
-		});
-
-        sharedPreferences = getPreferences(MODE_PRIVATE);
-		payChannelButton.setOnClickListener(new OnClickListener() {
-			public void onClick(View v) {
-                // Pay at least this to avoid the case where not enough value is sent to actually
-                // close the channel. That can happen if the final contract transaction would have to pay more in fees
-                // than it's actually worth.
-                makePayment(PAYMENT_SIZE);
-			}
+        Button channelsbutton = (Button) findViewById(R.id.open_channels_activity);
+        channelsbutton.setOnClickListener(new OnClickListener() {
+            public void onClick(View view) {
+                startActivity(new Intent(SampleActivity.this, PaymentChannelActivity.class));
+            }
         });
-		payChannelButton.setEnabled(false);
-
-		closeChannelButton.setOnClickListener(new OnClickListener() {
-			public void onClick(View v) {
-				channel.closeChannel();
-                channel = null;
-			}
-		});
-		closeChannelButton.setEnabled(false);
 	}
-
-    private void makePayment(final long amount) {
-        if (channel == null) {
-            Log.i(TAG, "No active channel - reconnecting");
-            attemptChannelOpen();
-            return;
-        }
-        AsyncTask<Void, Void, Long> task = new AsyncTask<Void, Void, Long>() {
-            private Throwable error = null;
-
-            @Override
-            protected Long doInBackground(Void... voids) {
-                try {
-                    return channel.sendMoney(amount).get();
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                } catch (ExecutionException e) {
-                    error = e;
-                    return (long) -1;
-                }
-            }
-
-            @Override
-            protected void onPostExecute(Long actualAmountSent) {
-                recordSpending(actualAmountSent);
-                if (getSpentSoFar() >= MIN_AUTH_REQ - PAYMENT_SIZE) {
-                    Log.i(TAG, "Amount left on channel is smaller than amount sent by pressing the button, closing");
-                    channel.closeChannel();
-                    channel = null;
-                }
-
-                if (error != null) {
-                    Toast.makeText(SampleActivity.this, "Got error when sending: " + error, Toast.LENGTH_LONG).show();
-                } else if (actualAmountSent != amount) {
-                    Toast.makeText(SampleActivity.this,
-                            "Wanted to send " + amount + " but actually sent " + actualAmountSent, Toast.LENGTH_LONG).show();
-                }
-            }
-        };
-        task.execute();
-    }
-
-    private void attemptChannelOpen() {
-        final String host = hostText.getText().toString();
-
-        openChannelButton.setEnabled(false);
-
-        // When we call prepare, we must ask for how much money we'll want to be able to spend in this session. If we
-        // have less, the user will be asked to authorize us. This means that if the user accepts our requested default,
-        // they'll be asked every time (because after making a few spends, our allowed balance is lower than
-        // MIN_AUTH_REQ). To solve this we remember how much we spent so far, and ask for the originally requested
-        // amount minus that, so the user only sees another auth request screen after we used up all the money they
-        // gave us before. Other apps might have different policies for when to bug the user to "recharge", like if
-        // the app starts to run low but isn't totally out of money just yet an app might use the notification bar.
-        long spentSoFar = getSpentSoFar();
-
-        long valueToRequest = MIN_AUTH_REQ - spentSoFar;
-        if (valueToRequest <= 0) {
-            // Time to ask the user for more dough ... when the user comes back to us in onActivityResult we will
-            // reset the pref that is tracking how much money we spent (because we got given some more).
-            valueToRequest = MIN_AUTH_REQ;
-        }
-
-        // Edge case: after doing a bunch of spends and closing a channel, we might end up with an amount that is too
-        // small for the server to accept. The server is allowed to refuse to create a channel with us if the channel
-        // size isn't big enough according to its own preferences. If that happens, we'll surface in
-        // channelClosedOrNotOpened(reason) below with reason == SERVER_REQUESTED_TOO_MUCH_VALUE. At that point, we'll
-        // go back to the user and ask for more quota, even though we haven't actually run out yet.
-        //
-        // If the amount of quota we're asking for (MIN_AUTH_REQ) is lower than what the server wants, we may never
-        // be able to set up a channel. In a real app you'd figure out the details of this as part of your own
-        // protocol or use case so this kind of confusion is avoided at a higher level.
-
-        // We may have to call prepare multiple times, if the user has to step through some UI flows.
-        BitcoinPaymentChannelManager.prepare(this, valueToRequest, true, testNet, CHANNEL_REQUEST_CODE, new BitcoinPaymentChannelManager.PrepareCallback() {
-            public void success() {
-                // We are authorized! Use the helper library to set up a simple TCP messaging socket.
-                startupPaymentChannel(host);
-            }
-
-            public void notifyUser(UIRequestReason reason) {
-                // We're in the foreground so invokeUI is true and this callback is never used.
-                // If we wanted to make payments from the background, this would be a place to pop up a notification
-                // in the users notification bar, so they can fix our problem later.
-                switch (reason) {
-                    case NEED_AUTH:
-                        // We ran out of money and need to ask the user for more.
-                        break;
-                    case NEED_WALLET_APP:
-                        // The wallet app vanished (i.e. the user uninstalled or disabled it).
-                        break;
-                }
-            }
-        });
-    }
-
-    private void startupPaymentChannel(String host) {
-        // Provide custom handling for events that can happen - mostly, toasting the user and twiddling the buttons.
-        AbstractTCPPaymentChannel channelListener = new AbstractTCPPaymentChannel(new InetSocketAddress(host, 4242), 15 * 1000) {
-            boolean wasOpened = false;
-
-            public void channelOpen(final byte[] contractHash) {
-                // A real app should securely contact the server and verify contractHash here
-                wasOpened = true;
-                Log.i(TAG, "Channel opened");
-                SampleActivity.this.runOnUiThread(new Runnable() {
-                    public void run() {
-                        payChannelButton.setEnabled(true);
-                        closeChannelButton.setEnabled(true);
-                        hostText.setEnabled(false);
-                        showMessage("Channel opened " + hexEncodeHash(contractHash));
-                    }
-                });
-            }
-
-            @Override
-            public void channelInterrupted() {
-                super.channelInterrupted();
-                Log.i(TAG, "Channel interrupted");
-                SampleActivity.this.runOnUiThread(new Runnable() {
-                    public void run() {
-                        showMessage("Channel interrupted, will reconnect on pay");
-                        updateUiForClose();
-                    }
-                });
-            }
-
-            @Override
-            public void channelClosedOrNotOpened(final CloseReason reason) {
-                super.channelClosedOrNotOpened(reason);
-                channel = null;
-                Log.i(TAG, "Channel closed or not opened: " + reason);
-
-                SampleActivity.this.runOnUiThread(new Runnable() {
-                    public void run() {
-                        if (reason == CloseReason.SERVER_REQUESTED_TOO_MUCH_VALUE) {
-                            // See the big comment about edge case above in attemptChannelOpen. Ask the user for more
-                            // quota if this happens so we can get over the servers minimum value (even though we do
-                            // have a bit of quota left).
-                            resetSpending();
-                            attemptChannelOpen();
-                            showMessage("Server requires more value than the app has remaining quota: reauth time!");
-                            return;
-                        }
-
-                        updateUiForClose();
-                        if (wasOpened)
-                            showMessage("Channel closed: " + reason);
-                        else
-                            showMessage("Channel failed to open: " + reason);
-                    }
-                });
-                // A real app may wish to retry opening a new channel here
-            }
-        };
-        // And now make a payments manager that uses it. hostID is some arbitrary string that identifies the
-        // entity you're paying - normally just host+port suffices to identify the server, but it could be
-        // other things too.
-        final String hostId = host + 4242;
-        channel = new BitcoinPaymentChannelManager(SampleActivity.this, hostId, testNet, channelListener);
-        // Connect the TCP socket to the server.
-        try {
-            channelListener.connect(channel);
-        } catch (final IOException e) {
-            channel = null;
-            SampleActivity.this.runOnUiThread(new Runnable() {
-                public void run() {
-                    payChannelButton.setEnabled(false);
-                    closeChannelButton.setEnabled(false);
-                    openChannelButton.setEnabled(true);
-                    hostText.setEnabled(true);
-                    showMessage("Failed to connect to server with exception " + e);
-                    Log.e(TAG, "Failed to connect to server", e);
-                }
-            });
-            return;
-        }
-        // And now we have a working socket, start the process of talking to Bitcoin Wallet and getting the
-        // stuff we need to process micropayments. This line starts the logical communication between the
-        // different parts of the protocol, with the channelListener tying it all to the network (this is why
-        // there are two connect calls, which may seem confusing otherwise).
-        channel.connect();
-    }
-
-    private void updateUiForClose() {
-        payChannelButton.setEnabled(false);
-        closeChannelButton.setEnabled(false);
-        openChannelButton.setEnabled(true);
-        hostText.setEnabled(true);
-    }
-
-    @Override
-    protected void onStop() {
-        super.onStop();
-        if (channel != null)
-            channel.disconnectFromWallet(false);
-    }
-
-    private void showMessage(String msg) {
-        Toast.makeText(this, msg, Toast.LENGTH_LONG).show();
-    }
 
     @Override
 	protected void onActivityResult(final int requestCode, final int resultCode, final Intent data)
@@ -375,28 +112,5 @@ public class SampleActivity extends Activity
 				Toast.makeText(this, "Unknown result.", Toast.LENGTH_LONG).show();
 			}
 		}
-		else if (requestCode == CHANNEL_REQUEST_CODE)
-		{
-			if (resultCode != Activity.RESULT_CANCELED) {
-                // We got authorized!
-                resetSpending();
-                attemptChannelOpen();
-            } else {
-                // Let the user try again.
-                openChannelButton.setEnabled(true);
-            }
-		}
 	}
-
-    public long getSpentSoFar() {
-        return sharedPreferences.getLong("spentSoFar", 0);
-    }
-
-    public void recordSpending(long amount) {
-        sharedPreferences.edit().putLong("spentSoFar", getSpentSoFar() + amount).commit();
-    }
-
-    public void resetSpending() {
-        sharedPreferences.edit().putLong("spentSoFar", 0).commit();
-    }
 }

@@ -51,13 +51,22 @@ interface IChannelRemoteService {
     void messageReceived(String cookie, in byte[] protobuf);
 
     /**
-     * Attempts to pay the server the given amount. The actual amount paid may be less (if the channel ran out of value)
-     * or more (if the remaining amount on the channel would have been unsettleable).
+     * Attempts to pay the server the given amount. The actual amount paid may be zero if the channel doesn't have
+     * enough value left to satisfy this request, or more if the remaining amount on the channel would have been
+     * unsettleable.
      *
      * @return A constant from {@link org.bitcoin.ChannelConstants} in an error case, or the amount of value actually
      *         spent, which may differ from the requested amount in some situations.
      */
     long payServer(String cookie, long amount);
+
+    /**
+     * Returns the amount of money the calling app has left, i.e. whatever the user authorized minus what has been
+     * spent. Note that if you call this immediately after prepare returned null (indicating success), the returned
+     * amount is guaranteed to be the same or greater than the requested amount. It may be greater if the user edited
+     * the amount to grant and raised it above the minimum.
+     */
+    long getBalanceRemaining();
 
     /**
      * Closes the given channel, future calls to this id will return {@link org.bitcoin.ChannelConstants#NO_SUCH_CHANNEL}.

@@ -329,7 +329,18 @@ public class ChannelService extends Service {
 			}
 		}
 
-		@Override
+        @Override
+        public long getBalanceRemaining() throws RemoteException {
+            lock.lock();
+            try {
+                String appID = getApplicationContext().getPackageManager().getNameForUid(Binder.getCallingUid());
+                return getAppValueRemaining(appID);
+            } finally {
+                lock.unlock();
+            }
+        }
+
+        @Override
 		public void closeConnection(String cookie) {
 			if (cookie == null)
 				return;

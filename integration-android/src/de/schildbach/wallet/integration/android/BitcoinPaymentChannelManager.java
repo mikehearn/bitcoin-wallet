@@ -39,6 +39,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
+// TODO: Rewrite this API from scratch.
+
 /**
  * <p>This class manages a connection with a wallet client and a payment channel on top.</p>
  *
@@ -425,6 +427,33 @@ public final class BitcoinPaymentChannelManager
 			}
 		});
 	}
+
+    public interface BalanceRemainingCallback {
+        /** Satoshis remaining or -1 if the wallet could not be connected to. */
+        public void result(long balanceRemaining);
+    }
+
+    /**
+     * Returns the amount of money remaining before authorization is re-required (asynchronously).
+     */
+    public static void getBalanceRemaining(Context context, boolean testNet, final BalanceRemainingCallback callback) {
+        final ServiceConnection conn = new ServiceConnection() {
+            public void onServiceConnected(ComponentName componentName, IBinder binder) {
+                IChannelRemoteService service = IChannelRemoteService.Stub.asInterface(binder);
+                try {
+                    callback.result(service.getBalanceRemaining());
+                } catch (RemoteException e) {
+                    Log.d(TAG, "Unable to talk to wallet app to get balance remaining", e);
+                }
+            }
+
+            public void onServiceDisconnected(ComponentName componentName) {
+            }
+        };
+        if (!context.bindService(new Intent("org.bitcoin.PAYMENT_CHANNEL" + (testNet ? "_TEST" : "")),
+                conn, Context.BIND_AUTO_CREATE))
+            callback.result(-1);
+    }
 
 	/**
 	 * Closes this channel, attempts to notify the server that the channel can be fully claimed. After this call, calls
