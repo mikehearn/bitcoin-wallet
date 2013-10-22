@@ -27,9 +27,10 @@ import android.os.RemoteException;
 import android.util.Log;
 import org.bitcoin.IChannelCallback;
 import org.bitcoin.IChannelRemoteService;
-import org.omg.CORBA.UNKNOWN;
+import org.bitcoin.PaymentException;
 
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 
 /**
@@ -170,7 +171,8 @@ public class PaymentChannels {
                 callback.success(balance);
                 return;
             }
-            Intent intent = rpc.prepare(chunkSize - balance);
+            Log.i(TAG, "Requesting prepare for " + (chunkSize + balance) + "/" + chunkSize + "/" + balance);
+            Intent intent = rpc.prepare(chunkSize + balance);
             if (intent != null)
                 callback.startActivity(intent);
             else
@@ -260,6 +262,7 @@ public class PaymentChannels {
                         }
 
                         public void channelOpenFailed() throws RemoteException {
+                            // TODO: This isn't actually called by the wallet app yet!
                             events.channelOpenFailed();
                         }
 
@@ -286,12 +289,19 @@ public class PaymentChannels {
          * Will attempt to send the given amount of money. The actual amount sent may be zero, if there wasn't enough
          * money left on this channel. Returns the amount actually sent.
          */
-        public long sendMoney(long amount) {
+        public long sendMoney(long amount) throws PaymentException {
             try {
                 checkStarted();
                 checkNotSettling();
-                return rpc.payServer(cookie.get(), amount);
-            } catch (Exception e) {
+                long result = rpc.payServer(cookie.get(), amount);
+                if (result < 0)
+                    throw new PaymentException((int) result);
+                return result;
+            } catch (RemoteException e) {
+                throw new RuntimeException(e);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            } catch (ExecutionException e) {
                 throw new RuntimeException(e);
             }
         }

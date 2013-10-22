@@ -12,6 +12,7 @@ import android.widget.EditText;
 
 import android.widget.Toast;
 import de.schildbach.wallet.integration.android.PaymentChannels;
+import org.bitcoin.PaymentException;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -61,9 +62,13 @@ public class PaymentChannelActivity extends Activity {
 
         payChannelButton.setOnClickListener(new View.OnClickListener() {
             public void onClick(View view) {
-                Log.i(TAG, "Sending " + PAYMENT_SIZE);
-                // This will briefly block the UI thread for signing, but that's OK for an example app.
-                channel.sendMoney(PAYMENT_SIZE);
+                try {
+                    Log.i(TAG, "Sending " + PAYMENT_SIZE);
+                    // This will briefly block the UI thread for signing, but that's OK for an example app.
+                    channel.sendMoney(PAYMENT_SIZE);
+                } catch (PaymentException e) {
+                    Log.e(TAG, "Payment failed", e);
+                }
             }
         });
         payChannelButton.setText("Pay " + PAYMENT_SIZE + " satoshis");
@@ -255,8 +260,12 @@ public class PaymentChannelActivity extends Activity {
     private void onPaymentChannelNegotiated(boolean success) {
         if (success) {
             Toast.makeText(this, "Payment channel negotiated, making an initial payment", Toast.LENGTH_LONG).show();
-            channel.sendMoney(PAYMENT_SIZE);
-            setButtons(ButtonState.READY);
+            try {
+                channel.sendMoney(PAYMENT_SIZE);
+                setButtons(ButtonState.READY);
+            } catch (PaymentException e) {
+                throw new RuntimeException(e);   // Crash the app.
+            }
         } else {
             Toast.makeText(this, "Failed to negotiate payment channel, see adb logs for details", Toast.LENGTH_LONG).show();
         }

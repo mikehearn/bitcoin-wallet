@@ -32,4 +32,9 @@ public class PaymentException extends Exception {
     public int getCode() {
         return code;
     }
+
+    @Override
+    public String toString() {
+        return "PaymentException (" + code + ")";
+    }
 }
