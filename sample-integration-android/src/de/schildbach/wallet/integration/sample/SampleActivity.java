@@ -19,26 +19,16 @@ package de.schildbach.wallet.integration.sample;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.content.SharedPreferences;
-import android.os.AsyncTask;
 import android.os.Bundle;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.style.TypefaceSpan;
-import android.util.Log;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
-import de.schildbach.wallet.integration.android.AbstractTCPPaymentChannel;
 import de.schildbach.wallet.integration.android.BitcoinIntegration;
-import de.schildbach.wallet.integration.android.BitcoinPaymentChannelManager;
-
-import java.io.IOException;
-import java.net.InetSocketAddress;
-import java.util.concurrent.ExecutionException;
 
 /**
  * @author Andreas Schildbach
