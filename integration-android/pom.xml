@@ -16,7 +16,6 @@
 	</parent>
 
 	<dependencies>
-
 		<!-- android.*, java.*, javax.* -->
 		<dependency>
 			<groupId>com.google.android</groupId>
@@ -24,12 +23,6 @@
 			<version>2.3.3</version>
 			<scope>provided</scope>
 		</dependency>
-		<dependency>
-			<groupId>com.google.guava</groupId>
-			<artifactId>guava</artifactId>
-			<version>13.0.1</version>
-		</dependency>
-
 	</dependencies>
 
 	<build>
