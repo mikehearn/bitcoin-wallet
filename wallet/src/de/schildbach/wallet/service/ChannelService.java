@@ -152,8 +152,11 @@ public class ChannelService extends Service {
 				walletApplication.getContractHashToCreatorMap().setCreatorApp(metadata.client.state().getMultisigContract().getHash(),
 						metadata.appName);
 				try {
-					metadata.listener.channelOpen(metadata.client.state().getMultisigContract().getHash().getBytes(),
-                            wasInitiated);
+                    long prePay = 0;
+                    if (wasInitiated)
+                        prePay = metadata.client.state().getValueSpent().longValue();
+					metadata.listener.channelOpen(
+                            metadata.client.state().getMultisigContract().getHash().getBytes(), prePay);
 				} catch (RemoteException e) {
 					closeConnection(cookie, false);
 				}
@@ -316,10 +319,14 @@ public class ChannelService extends Service {
                     // payment and thus we have to be able to handle the receiveMessage() call coming in on another
                     // binder thread. Without unlocking here, we'd deadlock. State might have changed arbitrarily
                     // after we come back.
+                    long actualAmount;
                     lock.unlock();
-                    ListenableFuture<BigInteger> future = client.incrementPayment(BigInteger.valueOf(amount));
-                    long actualAmount = Futures.getUnchecked(future).longValue();
-                    lock.lock();
+                    try {
+                        ListenableFuture<BigInteger> future = client.incrementPayment(BigInteger.valueOf(amount));
+                        actualAmount = Futures.getUnchecked(future).longValue();
+                    } finally {
+                        lock.lock();
+                    }
 					// Subtract the amount spent from the apps quota. Note that it may be a different amount
 					// to what was requested, e.g. it might be higher if the remaining amount on the channel
 					// would have been unsettleable.

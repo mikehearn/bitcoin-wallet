@@ -257,8 +257,8 @@ public class PaymentChannels {
             cookie = new FutureTask<String>(new Callable<String>() {
                 public String call() throws Exception {
                     return rpc.openConnection(new IChannelCallback.Stub() {
-                        public void channelOpen(byte[] contractHash, boolean wasInitiated) throws RemoteException {
-                            events.channelOpen(contractHash, wasInitiated);
+                        public void channelOpen(byte[] contractHash, long wasInitiatedWith) throws RemoteException {
+                            events.channelOpen(contractHash, wasInitiatedWith);
                         }
 
                         public void channelOpenFailed() throws RemoteException {
@@ -348,7 +348,7 @@ public class PaymentChannels {
     }
 
     public interface ChannelEvents {
-        public void channelOpen(byte[] contractHash, boolean wasInitiated) throws RemoteException;
+        public void channelOpen(byte[] contractHash, long wasInitiatedWith) throws RemoteException;
 
         public void channelOpenFailed() throws RemoteException;
 
