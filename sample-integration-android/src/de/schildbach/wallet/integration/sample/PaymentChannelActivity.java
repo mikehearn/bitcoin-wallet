@@ -168,7 +168,7 @@ public class PaymentChannelActivity extends Activity {
     // Callbacks that the wallet app will invoke when it needs us to send a message or tell us about
     // events happening on the payment channel.
     private final PaymentChannels.ChannelEvents channelEvents = new PaymentChannels.ChannelEvents() {
-        public void channelOpen(byte[] contractHash) throws RemoteException {
+        public void channelOpen(byte[] contractHash, boolean wasInitiated) throws RemoteException {
             String strHash = new BigInteger(1, contractHash).toString(16);
             Log.i(TAG, "channel open: contract hash is " + strHash);
             handler.post(new Runnable() {

@@ -28,8 +28,9 @@ oneway interface IChannelCallback {
      * @param contractHash The Bitcoin transaction hash of the channel contract. If some kind of server identity
      *                     verification is required, the client should compare this value with the server's via some
      *                     trusted mechanism (ie over an SSL connection to the server)
+     * @param wasInitiated Whether the channel is newly initiated or resumed from a pre-existing channel.
      */
-    void channelOpen(in byte[] contractHash);
+    void channelOpen(in byte[] contractHash, in boolean wasInitiated);
 
     /** Called if the channel fails to open (connection times out, etc) */
     void channelOpenFailed();

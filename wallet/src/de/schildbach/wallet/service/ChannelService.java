@@ -34,6 +34,8 @@ import com.google.bitcoin.protocols.channels.PaymentChannelCloseException;
 import com.google.bitcoin.protocols.channels.ValueOutOfRangeException;
 import com.google.bitcoin.utils.Threading;
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.protobuf.TextFormat;
 import de.schildbach.wallet.WalletApplication;
@@ -128,6 +130,7 @@ public class ChannelService extends Service {
 			@Override
 			public void sendToServer(Protos.TwoWayChannelMessage msg) {
 				try {
+                    log.info("Requesting send of message " + msg.getType());
 					metadata.listener.sendProtobuf(msg.toByteArray());
 				} catch (RemoteException e) {
 					closeConnection(cookie, false);
@@ -144,12 +147,13 @@ public class ChannelService extends Service {
 			}
 
 			@Override
-			public void channelOpen() {
+			public void channelOpen(boolean wasInitiated) {
 				log.info("Successfully opened payment channel");
 				walletApplication.getContractHashToCreatorMap().setCreatorApp(metadata.client.state().getMultisigContract().getHash(),
 						metadata.appName);
 				try {
-					metadata.listener.channelOpen(metadata.client.state().getMultisigContract().getHash().getBytes());
+					metadata.listener.channelOpen(metadata.client.state().getMultisigContract().getHash().getBytes(),
+                            wasInitiated);
 				} catch (RemoteException e) {
 					closeConnection(cookie, false);
 				}
@@ -160,13 +164,13 @@ public class ChannelService extends Service {
 
 	// Closes the given connection and removes it from the pool
 	@GuardedBy("lock")
-	private void closeConnection(String id, boolean generateServerClose) {
+	private void closeConnection(String id, boolean andSettle) {
 		try {
 			checkState(lock.isHeldByCurrentThread());
 			ChannelAndMetadata channel = checkNotNull(cookieToChannelMap.get(id));
-			if (generateServerClose) {
-				channel.client.close();
-				// We just sent a CLOSE message to the server. When it responds to us with the final contract,
+			if (andSettle) {
+				channel.client.settle();
+				// We just sent a SETTLE message to the server. When it responds to us with the final contract,
 				// the PaymentChannelClient will call destroyConnection() above, which will reinvoke this method
 				// with generateServerClose == false, meaning we will then tell the client it's OK to tear down
 				// the connection.
@@ -289,10 +293,11 @@ public class ChannelService extends Service {
 			lock.lock();
 			try {
 				ChannelAndMetadata channel = cookieToChannelMap.get(id);
-				if (channel == null || channel.client == null) {
-					log.error("App requested payment increase for an unknown channel");
-					return PaymentException.NO_SUCH_CHANNEL;
-				}
+                if (channel == null || channel.client == null) {
+                    log.error("App requested payment increase for unknown channel");
+                    return PaymentException.NO_SUCH_CHANNEL;
+                }
+                final PaymentChannelClient client = channel.client;
 
 				if (!getApplicationContext().getPackageManager().getNameForUid(Binder.getCallingUid()).equals(channel.appId)) {
 					log.error("App requested payment increase for a channel it didn't initiate");
@@ -306,7 +311,15 @@ public class ChannelService extends Service {
 				}
 
 				try {
-					long actualAmount = channel.client.incrementPayment(BigInteger.valueOf(amount)).longValue();
+                    // Temporarily release the lock here, because we have to do a blocking wait here to find out
+                    // how much we actually paid. The incrementPayment future will wait for the server to ack the
+                    // payment and thus we have to be able to handle the receiveMessage() call coming in on another
+                    // binder thread. Without unlocking here, we'd deadlock. State might have changed arbitrarily
+                    // after we come back.
+                    lock.unlock();
+                    ListenableFuture<BigInteger> future = client.incrementPayment(BigInteger.valueOf(amount));
+                    long actualAmount = Futures.getUnchecked(future).longValue();
+                    lock.lock();
 					// Subtract the amount spent from the apps quota. Note that it may be a different amount
 					// to what was requested, e.g. it might be higher if the remaining amount on the channel
 					// would have been unsettleable.
@@ -321,7 +334,7 @@ public class ChannelService extends Service {
 					return PaymentException.INSUFFICIENT_VALUE;
 				} catch (IllegalStateException e) {
 					log.error("Attempt to increment payment got IllegalStateException for app " + channel.appId, e);
-					closeConnection(id);
+					settle(id);
 					return PaymentException.CHANNEL_NOT_IN_SPENDABLE_STATE;
 				}
 			} finally {
@@ -341,10 +354,10 @@ public class ChannelService extends Service {
         }
 
         @Override
-		public void closeConnection(String cookie) {
+		public void settle(String cookie) {
 			if (cookie == null)
 				return;
-			log.info("App requested channel close");
+			log.info("App requested channel settlement");
 			lock.lock();
 			try {
 				ChannelService.this.closeConnection(cookie, true);
@@ -370,20 +383,24 @@ public class ChannelService extends Service {
 		public void messageReceived(String cookie, byte[] protobuf) {
 			if (cookie == null)
 				return;
-			lock.lock();
-			try {
-				final Protos.TwoWayChannelMessage msg = Protos.TwoWayChannelMessage.parseFrom(protobuf);
-				log.info("App provided message from server");
-				if (log.isDebugEnabled())
-					log.debug(TextFormat.printToString(msg));
+            Protos.TwoWayChannelMessage msg;
+            try {
+                msg = Protos.TwoWayChannelMessage.parseFrom(protobuf);
+                log.info("App provided message from server: {}", msg.getType());
+                if (log.isDebugEnabled())
+                    log.info(TextFormat.printToString(msg));
+            } catch (InvalidProtocolBufferException e) {
+                log.error("Got an invalid protobuf from client", e);
+                return;
+            }
+            lock.lock();
+            try {
 				ChannelAndMetadata metadata = cookieToChannelMap.get(cookie);
 				if (metadata == null || metadata.client == null) {
 					log.error("... but the given channel cookie wasn't found");
 					return;
 				}
 				metadata.client.receiveMessage(msg);
-			} catch (InvalidProtocolBufferException e) {
-				log.error("Got an invalid protobuf from client", e);
 			} catch (ValueOutOfRangeException e) {
 				// TODO: This shouldn't happen, but plumb it through anyway.
 				log.error("Got value out of range during initiate", e);

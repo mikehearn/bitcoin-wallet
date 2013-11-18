@@ -69,10 +69,10 @@ interface IChannelRemoteService {
     long getBalanceRemaining();
 
     /**
-     * Closes the given channel, future calls to this id will return {@link org.bitcoin.ChannelConstants#NO_SUCH_CHANNEL}.
+     * Settles the given channel, future calls to this id will return {@link org.bitcoin.ChannelConstants#NO_SUCH_CHANNEL}.
      * The server will be asked to broadcast the last contract so the unspent money will come back into our wallet.
      */
-    void closeConnection(String cookie);
+    void settle(String cookie);
 
     /**
      * Call this before doing an unbind(). It marks the given channel as inactive, so they will be resumed if you do
