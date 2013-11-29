@@ -221,7 +221,7 @@ public class WalletApplication extends Application
 		allLogging.setLevel(Level.INFO);
 
 		final ch.qos.logback.classic.Logger appLogging = context.getLogger("de.schildbach.wallet");
-		appLogging.setLevel(Level.INFO);
+		appLogging.setLevel(Level.DEBUG);
 	}
 
 	private static final class WalletAutosaveEventListener implements WalletFiles.Listener
