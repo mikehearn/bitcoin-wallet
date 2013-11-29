@@ -27,6 +27,7 @@ import android.os.Binder;
 import android.os.IBinder;
 import android.os.RemoteException;
 import com.google.bitcoin.core.ECKey;
+import com.google.bitcoin.core.InsufficientMoneyException;
 import com.google.bitcoin.core.NetworkParameters;
 import com.google.bitcoin.core.Sha256Hash;
 import com.google.bitcoin.protocols.channels.PaymentChannelClient;
@@ -408,7 +409,7 @@ public class ChannelService extends Service {
 					return;
 				}
 				metadata.client.receiveMessage(msg);
-			} catch (ValueOutOfRangeException e) {
+			} catch (InsufficientMoneyException e) {
 				// TODO: This shouldn't happen, but plumb it through anyway.
 				log.error("Got value out of range during initiate", e);
 			} finally {
