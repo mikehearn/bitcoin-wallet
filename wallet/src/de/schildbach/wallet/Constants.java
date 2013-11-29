@@ -22,11 +22,9 @@ import java.nio.charset.Charset;
 
 import android.os.Environment;
 import android.text.format.DateUtils;
-
 import com.google.bitcoin.core.NetworkParameters;
 import com.google.bitcoin.params.MainNetParams;
-import com.google.bitcoin.params.TestNet3Params;
-
+import com.google.bitcoin.params.RegTestParams;
 import de.schildbach.wallet_test.R;
 
 /**
@@ -36,7 +34,7 @@ public class Constants
 {
 	public static final boolean TEST = R.class.getPackage().getName().contains("_test");
 
-	public static final NetworkParameters NETWORK_PARAMETERS = TEST ? TestNet3Params.get() : MainNetParams.get();
+	public static final NetworkParameters NETWORK_PARAMETERS = TEST ? RegTestParams.get() : MainNetParams.get();
 	private static final String FILENAME_NETWORK_SUFFIX = NETWORK_PARAMETERS.getId().equals(NetworkParameters.ID_MAINNET) ? "" : "-testnet";
 
 	public static final String WALLET_FILENAME = "wallet" + FILENAME_NETWORK_SUFFIX;
@@ -50,7 +48,7 @@ public class Constants
 
 	public static final String BLOCKCHAIN_FILENAME = "blockchain" + FILENAME_NETWORK_SUFFIX;
 
-	public static final String CHECKPOINTS_FILENAME = "checkpoints" + FILENAME_NETWORK_SUFFIX;
+	public static final String CHECKPOINTS_FILENAME = "xxcheckpoints" + FILENAME_NETWORK_SUFFIX;
 
 	private static final String BLOCKEXPLORER_BASE_URL_PROD = "https://blockexplorer.com/";
 	private static final String BLOCKEXPLORER_BASE_URL_TEST = "https://blockexplorer.com/testnet/";
